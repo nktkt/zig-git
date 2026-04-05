@@ -20,7 +20,7 @@ pub const Config = struct {
         key: []u8,
         value: []u8,
 
-        fn deinit(self: *OwnedEntry, allocator: std.mem.Allocator) void {
+        pub fn deinit(self: *OwnedEntry, allocator: std.mem.Allocator) void {
             allocator.free(self.section);
             if (self.subsection) |ss| allocator.free(ss);
             allocator.free(self.key);

@@ -11,6 +11,35 @@ const branch_mod = @import("branch.zig");
 const tag_mod = @import("tag.zig");
 const ref_mod = @import("ref.zig");
 const reflog_mod = @import("reflog.zig");
+const add_mod = @import("add.zig");
+const commit_mod = @import("commit_cmd.zig");
+const log_mod = @import("log.zig");
+const diff_mod = @import("diff.zig");
+const show_mod = @import("show.zig");
+const rev_parse_mod = @import("rev_parse.zig");
+const checkout_mod = @import("checkout.zig");
+const merge_mod = @import("merge.zig");
+const reset_mod = @import("reset.zig");
+const stash_mod = @import("stash.zig");
+const remote_mod = @import("remote.zig");
+const clone_mod = @import("clone.zig");
+const fetch_mod = @import("fetch.zig");
+const push_mod = @import("push.zig");
+const clean_mod = @import("clean.zig");
+const rm_mod = @import("rm.zig");
+const mv_mod = @import("mv.zig");
+const describe_mod = @import("describe.zig");
+const shortlog_mod = @import("shortlog.zig");
+const notes_mod = @import("notes.zig");
+const count_objects_mod = @import("count_objects.zig");
+const fsck_mod = @import("fsck.zig");
+const grep_mod = @import("grep.zig");
+const blame_mod = @import("blame.zig");
+const cherry_pick_mod = @import("cherry_pick.zig");
+const rebase_mod = @import("rebase.zig");
+const bisect_mod = @import("bisect.zig");
+const worktree_mod = @import("worktree.zig");
+const archive_mod = @import("archive.zig");
 
 comptime {
     _ = @import("hash.zig");
@@ -33,6 +62,39 @@ comptime {
     _ = @import("tag.zig");
     _ = @import("ref.zig");
     _ = @import("reflog.zig");
+    _ = @import("tree_builder.zig");
+    _ = @import("add.zig");
+    _ = @import("commit_cmd.zig");
+    _ = @import("rev_parse.zig");
+    _ = @import("diff.zig");
+    _ = @import("log.zig");
+    _ = @import("show.zig");
+    _ = @import("tree_diff.zig");
+    _ = @import("remote.zig");
+    _ = @import("clone.zig");
+    _ = @import("fetch.zig");
+    _ = @import("push.zig");
+    _ = @import("pack_writer.zig");
+    _ = @import("object_walk.zig");
+    _ = @import("checkout.zig");
+    _ = @import("merge.zig");
+    _ = @import("reset.zig");
+    _ = @import("stash.zig");
+    _ = @import("clean.zig");
+    _ = @import("rm.zig");
+    _ = @import("mv.zig");
+    _ = @import("describe.zig");
+    _ = @import("shortlog.zig");
+    _ = @import("notes.zig");
+    _ = @import("count_objects.zig");
+    _ = @import("fsck.zig");
+    _ = @import("grep.zig");
+    _ = @import("blame.zig");
+    _ = @import("cherry_pick.zig");
+    _ = @import("rebase.zig");
+    _ = @import("bisect.zig");
+    _ = @import("worktree.zig");
+    _ = @import("archive.zig");
 }
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -41,15 +103,59 @@ const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 const usage =
     \\usage: zig-git <command> [<args>]
     \\
-    \\Commands:
+    \\Core commands:
     \\  init         Create an empty Git repository
+    \\  clone        Clone a repository into a new directory
+    \\  add          Add file contents to the index
+    \\  commit       Record changes to the repository
+    \\  status       Show the working tree status
+    \\  diff         Show changes between commits, commit and working tree, etc.
+    \\  log          Show commit logs
+    \\  show         Show various types of objects
+    \\
+    \\Branch & tag:
+    \\  branch       List, create, or delete branches
+    \\  checkout     Switch branches or restore working tree files
+    \\  merge        Join two or more development histories together
+    \\  tag          Create, list, delete or verify a tag object
+    \\
+    \\Working tree:
+    \\  clean        Remove untracked files from the working tree
+    \\  rm           Remove files from the working tree and index
+    \\  mv           Move or rename a file, a directory, or a symlink
+    \\
+    \\Undo & stash:
+    \\  reset        Reset current HEAD to the specified state
+    \\  stash        Stash the changes in a dirty working directory
+    \\
+    \\Remote:
+    \\  remote       Manage set of tracked repositories
+    \\  fetch        Download objects and refs from another repository
+    \\  push         Update remote refs along with associated objects
+    \\
+    \\History rewriting:
+    \\  cherry-pick  Apply the changes introduced by some existing commits
+    \\  rebase       Reapply commits on top of another base tip
+    \\  bisect       Use binary search to find the commit that introduced a bug
+    \\
+    \\Inspect & compare:
+    \\  grep         Print lines matching a pattern
+    \\  blame        Show what revision and author last modified each line
+    \\  describe     Give an object a human readable name based on tags
+    \\  shortlog     Summarize 'git log' output
+    \\  notes        Add or inspect object notes
+    \\
+    \\Plumbing:
     \\  cat-file     Provide content or type and size information for repository objects
     \\  hash-object  Compute object ID and optionally creates a blob from a file
+    \\  rev-parse    Pick out and massage parameters
     \\  config       Get and set repository or global options
-    \\  status       Show the working tree status
-    \\  branch       List, create, or delete branches
-    \\  tag          List, create, or delete tags
     \\  reflog       Show reference logs
+    \\  count-objects Count unpacked number of objects and their disk consumption
+    \\  fsck         Verify the connectivity and validity of objects
+    \\  worktree     Manage multiple working trees
+    \\  archive      Create an archive of files from a named tree
+    \\
     \\  version      Display version information
     \\
 ;
@@ -105,41 +211,50 @@ pub fn main() !void {
     const command = args[1];
 
     if (std.mem.eql(u8, command, "version") or std.mem.eql(u8, command, "--version")) {
-        try stdout_file.writeAll("zig-git version 0.1.0\n");
+        try stdout_file.writeAll("zig-git version 0.2.0\n");
         return;
     }
 
-    if (std.mem.eql(u8, command, "init")) {
-        return runInit(allocator, args[2..]);
-    }
+    // Commands that don't need a repo
+    if (std.mem.eql(u8, command, "init")) return runInit(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "clone")) return runClone(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "hash-object")) return runHashObject(allocator, args[2..]);
 
-    if (std.mem.eql(u8, command, "cat-file")) {
-        return runCatFile(allocator, args[2..]);
-    }
-
-    if (std.mem.eql(u8, command, "hash-object")) {
-        return runHashObject(allocator, args[2..]);
-    }
-
-    if (std.mem.eql(u8, command, "config")) {
-        return runConfig(allocator, args[2..]);
-    }
-
-    if (std.mem.eql(u8, command, "status")) {
-        return runStatusCmd(allocator);
-    }
-
-    if (std.mem.eql(u8, command, "branch")) {
-        return runBranchCmd(allocator, args[2..]);
-    }
-
-    if (std.mem.eql(u8, command, "tag")) {
-        return runTagCmd(allocator, args[2..]);
-    }
-
-    if (std.mem.eql(u8, command, "reflog")) {
-        return runReflogCmd(allocator, args[2..]);
-    }
+    // Commands that need a repo
+    if (std.mem.eql(u8, command, "cat-file")) return runCatFile(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "config")) return runConfig(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "status")) return runStatusCmd(allocator);
+    if (std.mem.eql(u8, command, "branch")) return runBranchCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "tag")) return runTagCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "reflog")) return runReflogCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "add")) return runAddCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "commit")) return runCommitCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "log")) return runLogCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "diff")) return runDiffCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "show")) return runShowCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "rev-parse")) return runRevParseCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "checkout") or std.mem.eql(u8, command, "switch")) return runCheckoutCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "merge")) return runMergeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "reset")) return runResetCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "stash")) return runStashCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "remote")) return runRemoteCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "fetch")) return runFetchCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "push")) return runPushCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "clean")) return runCleanCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "rm") or std.mem.eql(u8, command, "remove")) return runRmCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "mv") or std.mem.eql(u8, command, "move")) return runMvCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "describe")) return runDescribeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "shortlog")) return runShortlogCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "notes")) return runNotesCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "count-objects")) return runCountObjectsCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "fsck")) return runFsckCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "grep")) return runGrepCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "blame") or std.mem.eql(u8, command, "annotate")) return runBlameCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "cherry-pick")) return runCherryPickCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "rebase")) return runRebaseCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "bisect")) return runBisectCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "worktree")) return runWorktreeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "archive")) return runArchiveCmd(allocator, args[2..]);
 
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "zig-git: '{s}' is not a zig-git command.\n\n", .{command}) catch {
@@ -150,6 +265,8 @@ pub fn main() !void {
     try stderr_file.writeAll(usage);
     std.process.exit(1);
 }
+
+// --- Plumbing commands ---
 
 fn runCatFile(allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len < 2) {
@@ -181,10 +298,7 @@ fn runCatFile(allocator: std.mem.Allocator, args: []const []const u8) !void {
         std.process.exit(1);
     }
 
-    var repo = repository.Repository.discover(allocator, null) catch {
-        try stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n");
-        std.process.exit(128);
-    };
+    var repo = discoverRepo(allocator);
     defer repo.deinit();
 
     cat_file.catFile(&repo, allocator, object_ref.?, mode, stdout_file) catch |err| {
@@ -196,9 +310,7 @@ fn runCatFile(allocator: std.mem.Allocator, args: []const []const u8) !void {
                 std.process.exit(128);
             },
             error.AmbiguousObjectName => {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "fatal: ambiguous argument '{s}'\n", .{object_ref.?}) catch "fatal: ambiguous argument\n";
-                try stderr_file.writeAll(msg);
+                try stderr_file.writeAll("fatal: ambiguous argument\n");
                 std.process.exit(128);
             },
             else => return err,
@@ -248,7 +360,6 @@ fn runHashObject(allocator: std.mem.Allocator, args: []const []const u8) !void {
     const n = try file.readAll(content);
     const data = content[0..n];
 
-    // Compute hash
     var header_buf: [64]u8 = undefined;
     var hstream = std.io.fixedBufferStream(&header_buf);
     const hwriter = hstream.writer();
@@ -265,12 +376,8 @@ fn runHashObject(allocator: std.mem.Allocator, args: []const []const u8) !void {
     const oid = types.ObjectId{ .bytes = digest };
 
     if (write_object) {
-        var repo = repository.Repository.discover(allocator, null) catch {
-            try stderr_file.writeAll("fatal: not a git repository\n");
-            std.process.exit(128);
-        };
+        var repo = discoverRepo(allocator);
         defer repo.deinit();
-
         _ = try loose.writeLooseObject(allocator, repo.git_dir, obj_type, data);
     }
 
@@ -278,6 +385,8 @@ fn runHashObject(allocator: std.mem.Allocator, args: []const []const u8) !void {
     try stdout_file.writeAll(&hex);
     try stdout_file.writeAll("\n");
 }
+
+// --- Setup commands ---
 
 fn runInit(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var opts = init_mod.InitOptions{};
@@ -293,29 +402,24 @@ fn runInit(allocator: std.mem.Allocator, args: []const []const u8) !void {
                 std.process.exit(1);
             }
             opts.initial_branch = args[i];
-        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            try stdout_file.writeAll(init_usage);
-            return;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.directory = arg;
-        } else {
-            var buf: [256]u8 = undefined;
-            const msg = std.fmt.bufPrint(&buf, "error: unknown option '{s}'\n", .{arg}) catch "error: unknown option\n";
-            try stderr_file.writeAll(msg);
-            try stderr_file.writeAll(init_usage);
-            std.process.exit(1);
         }
     }
 
     const git_dir = init_mod.initRepository(allocator, opts) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "fatal: cannot create repository: {s}\n", .{@errorName(err)}) catch
-            "fatal: cannot create repository\n";
-        try stderr_file.writeAll(msg);
-        std.process.exit(128);
+        fatalError("cannot create repository", err);
     };
     allocator.free(git_dir);
 }
+
+fn runClone(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    clone_mod.runClone(allocator, args) catch |err| {
+        fatalError("clone failed", err);
+    };
+}
+
+// --- Config ---
 
 fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
     if (args.len == 0) {
@@ -323,11 +427,7 @@ fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
         std.process.exit(1);
     }
 
-    // Find the repo config file
-    var repo = repository.Repository.discover(allocator, null) catch {
-        try stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n");
-        std.process.exit(128);
-    };
+    var repo = discoverRepo(allocator);
     defer repo.deinit();
 
     var config_path_buf: [4096]u8 = undefined;
@@ -347,9 +447,6 @@ fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
             mode = .get;
         } else if (std.mem.eql(u8, arg, "--list") or std.mem.eql(u8, arg, "-l")) {
             mode = .list;
-        } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
-            try stdout_file.writeAll(config_usage);
-            return;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             if (key == null) {
                 key = arg;
@@ -362,11 +459,8 @@ fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
 
     switch (mode) {
         .list => {
-            var cfg = config_mod.Config.loadFile(allocator, config_path) catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "fatal: unable to read config file: {s}\n", .{@errorName(err)}) catch
-                    "fatal: unable to read config file\n";
-                try stderr_file.writeAll(msg);
+            var cfg = config_mod.Config.loadFile(allocator, config_path) catch {
+                try stderr_file.writeAll("fatal: unable to read config file\n");
                 std.process.exit(128);
             };
             defer cfg.deinit();
@@ -384,20 +478,14 @@ fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
         },
         .get => {
             if (key == null) {
-                try stderr_file.writeAll("error: key required\n");
                 try stderr_file.writeAll(config_usage);
                 std.process.exit(1);
             }
-
-            var cfg = config_mod.Config.loadFile(allocator, config_path) catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "fatal: unable to read config file: {s}\n", .{@errorName(err)}) catch
-                    "fatal: unable to read config file\n";
-                try stderr_file.writeAll(msg);
+            var cfg = config_mod.Config.loadFile(allocator, config_path) catch {
+                try stderr_file.writeAll("fatal: unable to read config file\n");
                 std.process.exit(128);
             };
             defer cfg.deinit();
-
             if (cfg.get(key.?)) |val| {
                 try stdout_file.writeAll(val);
                 try stdout_file.writeAll("\n");
@@ -410,91 +498,206 @@ fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
                 try stderr_file.writeAll(config_usage);
                 std.process.exit(1);
             }
-
-            var cfg = config_mod.Config.loadFile(allocator, config_path) catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "fatal: unable to read config file: {s}\n", .{@errorName(err)}) catch
-                    "fatal: unable to read config file\n";
-                try stderr_file.writeAll(msg);
+            var cfg = config_mod.Config.loadFile(allocator, config_path) catch {
+                try stderr_file.writeAll("fatal: unable to read config file\n");
                 std.process.exit(128);
             };
             defer cfg.deinit();
-
-            cfg.set(key.?, value.?) catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "fatal: unable to set config: {s}\n", .{@errorName(err)}) catch
-                    "fatal: unable to set config\n";
-                try stderr_file.writeAll(msg);
+            cfg.set(key.?, value.?) catch {
+                try stderr_file.writeAll("fatal: unable to set config\n");
                 std.process.exit(128);
             };
-
-            cfg.writeFile(config_path) catch |err| {
-                var buf: [256]u8 = undefined;
-                const msg = std.fmt.bufPrint(&buf, "fatal: unable to write config file: {s}\n", .{@errorName(err)}) catch
-                    "fatal: unable to write config file\n";
-                try stderr_file.writeAll(msg);
+            cfg.writeFile(config_path) catch {
+                try stderr_file.writeAll("fatal: unable to write config file\n");
                 std.process.exit(128);
             };
         },
     }
 }
 
-fn runStatusCmd(allocator: std.mem.Allocator) !void {
-    var repo = repository.Repository.discover(allocator, null) catch {
-        try stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n");
-        std.process.exit(128);
-    };
-    defer repo.deinit();
+// --- Working tree commands ---
 
+fn runStatusCmd(allocator: std.mem.Allocator) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
     status_mod.runStatus(&repo, allocator, stdout_file, stderr_file) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "fatal: status failed: {s}\n", .{@errorName(err)}) catch
-            "fatal: status failed\n";
-        try stderr_file.writeAll(msg);
-        std.process.exit(128);
+        fatalError("status failed", err);
     };
 }
 
-fn runBranchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
-    var repo = repository.Repository.discover(allocator, null) catch {
-        try stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n");
-        std.process.exit(128);
+fn runAddCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    add_mod.runAdd(&repo, allocator, args) catch |err| {
+        fatalError("add failed", err);
     };
+}
+
+fn runCommitCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    commit_mod.runCommit(&repo, allocator, args) catch |err| {
+        fatalError("commit failed", err);
+    };
+}
+
+fn runDiffCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
     defer repo.deinit();
 
+    var mode: diff_mod.DiffMode = .worktree_vs_index;
+    var commit_ref: ?[]const u8 = null;
+
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--cached") or std.mem.eql(u8, arg, "--staged")) {
+            mode = .index_vs_head;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            commit_ref = arg;
+            mode = .worktree_vs_commit;
+        }
+    }
+
+    diff_mod.runDiff(&repo, allocator, mode, commit_ref, stdout_file) catch |err| {
+        fatalError("diff failed", err);
+    };
+}
+
+// --- History commands ---
+
+fn runLogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+
+    var opts = log_mod.LogOptions{};
+    for (args) |arg| {
+        if (std.mem.startsWith(u8, arg, "-n") or std.mem.startsWith(u8, arg, "--max-count=")) {
+            // Parse max count
+            const val = if (std.mem.startsWith(u8, arg, "-n"))
+                arg[2..]
+            else
+                arg["--max-count=".len..];
+            opts.max_count = std.fmt.parseInt(usize, val, 10) catch 0;
+        } else if (std.mem.eql(u8, arg, "--oneline")) {
+            opts.format = .oneline;
+        } else if (std.mem.eql(u8, arg, "--graph")) {
+            opts.graph = true;
+        } else if (!std.mem.startsWith(u8, arg, "-")) {
+            opts.start_ref = arg;
+        }
+    }
+
+    log_mod.runLog(&repo, allocator, opts, stdout_file) catch |err| {
+        fatalError("log failed", err);
+    };
+}
+
+fn runShowCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+
+    var ref_str: []const u8 = "HEAD";
+    for (args) |arg| {
+        if (!std.mem.startsWith(u8, arg, "-")) {
+            ref_str = arg;
+            break;
+        }
+    }
+
+    show_mod.runShow(&repo, allocator, ref_str, stdout_file) catch |err| {
+        fatalError("show failed", err);
+    };
+}
+
+fn runRevParseCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    rev_parse_mod.runRevParse(&repo, allocator, args) catch |err| {
+        fatalError("rev-parse failed", err);
+    };
+}
+
+// --- Branch commands ---
+
+fn runBranchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
     branch_mod.runBranch(&repo, allocator, args) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "fatal: branch failed: {s}\n", .{@errorName(err)}) catch
-            "fatal: branch failed\n";
-        try stderr_file.writeAll(msg);
-        std.process.exit(128);
+        fatalError("branch failed", err);
     };
 }
 
 fn runTagCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
-    var repo = repository.Repository.discover(allocator, null) catch {
-        try stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n");
-        std.process.exit(128);
-    };
+    var repo = discoverRepo(allocator);
     defer repo.deinit();
-
     tag_mod.runTag(&repo, allocator, args) catch |err| {
-        var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "fatal: tag failed: {s}\n", .{@errorName(err)}) catch
-            "fatal: tag failed\n";
-        try stderr_file.writeAll(msg);
-        std.process.exit(128);
+        fatalError("tag failed", err);
+    };
+}
+
+fn runCheckoutCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    checkout_mod.runCheckout(&repo, allocator, args) catch |err| {
+        fatalError("checkout failed", err);
+    };
+}
+
+fn runMergeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    merge_mod.runMerge(&repo, allocator, args) catch |err| {
+        fatalError("merge failed", err);
+    };
+}
+
+// --- Undo commands ---
+
+fn runResetCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    reset_mod.runReset(&repo, allocator, args) catch |err| {
+        fatalError("reset failed", err);
+    };
+}
+
+fn runStashCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    stash_mod.runStash(&repo, allocator, args) catch |err| {
+        fatalError("stash failed", err);
+    };
+}
+
+// --- Remote commands ---
+
+fn runRemoteCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    remote_mod.runRemote(allocator, repo.git_dir, args) catch |err| {
+        fatalError("remote failed", err);
+    };
+}
+
+fn runFetchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    fetch_mod.runFetch(allocator, repo.git_dir, args) catch |err| {
+        fatalError("fetch failed", err);
+    };
+}
+
+fn runPushCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    push_mod.runPush(allocator, repo.git_dir, args) catch |err| {
+        fatalError("push failed", err);
     };
 }
 
 fn runReflogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
-    var repo = repository.Repository.discover(allocator, null) catch {
-        try stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n");
-        std.process.exit(128);
-    };
+    var repo = discoverRepo(allocator);
     defer repo.deinit();
 
-    // Default to showing HEAD reflog
     var ref_name: []const u8 = "HEAD";
     if (args.len > 0 and !std.mem.startsWith(u8, args[0], "-")) {
         ref_name = args[0];
@@ -502,16 +705,13 @@ fn runReflogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
 
     var result = reflog_mod.readReflog(allocator, repo.git_dir, ref_name) catch {
         var buf: [256]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "fatal: reflog for '{s}' not found\n", .{ref_name}) catch
-            "fatal: reflog not found\n";
+        const msg = std.fmt.bufPrint(&buf, "fatal: reflog for '{s}' not found\n", .{ref_name}) catch "fatal: reflog not found\n";
         try stderr_file.writeAll(msg);
         std.process.exit(128);
     };
     defer result.deinit();
 
     const entries = result.entries;
-
-    // Print entries in reverse order (newest first), like git
     var i: usize = entries.len;
     while (i > 0) {
         i -= 1;
@@ -527,4 +727,146 @@ fn runReflogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
         }) catch continue;
         try stdout_file.writeAll(line);
     }
+}
+
+// --- Working tree commands (clean, rm, mv) ---
+
+fn runCleanCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    clean_mod.runClean(&repo, allocator, args) catch |err| {
+        fatalError("clean failed", err);
+    };
+}
+
+fn runRmCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    rm_mod.runRm(&repo, allocator, args) catch |err| {
+        fatalError("rm failed", err);
+    };
+}
+
+fn runMvCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    mv_mod.runMv(&repo, allocator, args) catch |err| {
+        fatalError("mv failed", err);
+    };
+}
+
+// --- Inspect commands ---
+
+fn runDescribeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    describe_mod.runDescribe(&repo, allocator, args) catch |err| {
+        fatalError("describe failed", err);
+    };
+}
+
+fn runShortlogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    shortlog_mod.runShortlog(&repo, allocator, args) catch |err| {
+        fatalError("shortlog failed", err);
+    };
+}
+
+fn runNotesCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    notes_mod.runNotes(&repo, allocator, args) catch |err| {
+        fatalError("notes failed", err);
+    };
+}
+
+fn runCountObjectsCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    count_objects_mod.runCountObjects(&repo, allocator, args) catch |err| {
+        fatalError("count-objects failed", err);
+    };
+}
+
+fn runFsckCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    fsck_mod.runFsck(&repo, allocator, args) catch |err| {
+        fatalError("fsck failed", err);
+    };
+}
+
+// --- History rewriting commands ---
+
+fn runGrepCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    grep_mod.runGrep(&repo, allocator, args) catch |err| {
+        fatalError("grep failed", err);
+    };
+}
+
+fn runBlameCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    blame_mod.runBlame(&repo, allocator, args) catch |err| {
+        fatalError("blame failed", err);
+    };
+}
+
+fn runCherryPickCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    cherry_pick_mod.runCherryPick(&repo, allocator, args) catch |err| {
+        fatalError("cherry-pick failed", err);
+    };
+}
+
+fn runRebaseCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    rebase_mod.runRebase(&repo, allocator, args) catch |err| {
+        fatalError("rebase failed", err);
+    };
+}
+
+fn runBisectCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    bisect_mod.runBisect(&repo, allocator, args) catch |err| {
+        fatalError("bisect failed", err);
+    };
+}
+
+fn runWorktreeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    worktree_mod.runWorktree(&repo, allocator, args) catch |err| {
+        fatalError("worktree failed", err);
+    };
+}
+
+fn runArchiveCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    archive_mod.runArchive(&repo, allocator, args) catch |err| {
+        fatalError("archive failed", err);
+    };
+}
+
+// --- Helpers ---
+
+fn discoverRepo(allocator: std.mem.Allocator) repository.Repository {
+    return repository.Repository.discover(allocator, null) catch {
+        stderr_file.writeAll("fatal: not a git repository (or any of the parent directories): .git\n") catch {};
+        std.process.exit(128);
+    };
+}
+
+fn fatalError(context: []const u8, err: anyerror) noreturn {
+    var buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "fatal: {s}: {s}\n", .{ context, @errorName(err) }) catch "fatal: unknown error\n";
+    stderr_file.writeAll(msg) catch {};
+    std.process.exit(128);
 }
