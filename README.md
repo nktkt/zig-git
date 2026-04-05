@@ -178,4 +178,4 @@ TBD — likely GPL-2.0 (matching upstream git) or MIT.
 
 ## Detailed Roadmap
 
-See [GIT_ZIG_ROADMAP.md](./GIT_ZIG_ROADMAP.md) for the full LOC-based analysis with per-file breakdowns (Japanese).
+See [GIT_ZIG_ROADMAP.md](./GIT_ZIG_ROADMAP.md) for the full LOC-based analysis with per-file breakdowns.
