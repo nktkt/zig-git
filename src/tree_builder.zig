@@ -4,7 +4,7 @@ const loose = @import("loose.zig");
 const index_mod = @import("index.zig");
 
 /// A single entry in a tree object being built.
-const TreeBuildEntry = struct {
+pub const TreeBuildEntry = struct {
     mode: []const u8,
     name: []const u8,
     oid: types.ObjectId,

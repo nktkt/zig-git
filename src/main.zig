@@ -40,6 +40,40 @@ const rebase_mod = @import("rebase.zig");
 const bisect_mod = @import("bisect.zig");
 const worktree_mod = @import("worktree.zig");
 const archive_mod = @import("archive.zig");
+const gc_mod = @import("gc.zig");
+const prune_mod = @import("prune.zig");
+const repack_mod_cmd = @import("repack.zig");
+const maintenance_mod = @import("maintenance.zig");
+const pack_refs_mod = @import("pack_refs.zig");
+const reflog_expire_mod = @import("reflog_expire.zig");
+const commit_graph_write_mod = @import("commit_graph_write.zig");
+const attributes_mod = @import("attributes.zig");
+const hooks_mod = @import("hooks.zig");
+const sparse_checkout_mod = @import("sparse_checkout.zig");
+const bundle_mod = @import("bundle.zig");
+const rerere_mod = @import("rerere.zig");
+const range_diff_mod = @import("range_diff.zig");
+const multi_pack_index_mod = @import("multi_pack_index.zig");
+const shallow_mod = @import("shallow.zig");
+const filter_branch_mod = @import("filter_branch.zig");
+const credential_mod = @import("credential.zig");
+const var_mod = @import("var.zig");
+const hash_object_ext_mod = @import("hash_object_ext.zig");
+const ls_files_mod = @import("ls_files.zig");
+const ls_tree_mod = @import("ls_tree.zig");
+const update_index_mod = @import("update_index.zig");
+const write_tree_mod = @import("write_tree.zig");
+const read_tree_mod = @import("read_tree.zig");
+const for_each_ref_mod = @import("for_each_ref.zig");
+const verify_pack_mod = @import("verify_pack.zig");
+const symbolic_ref_mod = @import("symbolic_ref.zig");
+const check_ignore_mod = @import("check_ignore.zig");
+const diff_tree_mod = @import("diff_tree.zig");
+const submodule_mod = @import("submodule.zig");
+const apply_mod_cmd = @import("apply.zig");
+const format_patch_mod = @import("format_patch.zig");
+const am_mod = @import("am.zig");
+const send_email_mod = @import("send_email.zig");
 
 comptime {
     _ = @import("hash.zig");
@@ -95,6 +129,49 @@ comptime {
     _ = @import("bisect.zig");
     _ = @import("worktree.zig");
     _ = @import("archive.zig");
+    _ = @import("gc.zig");
+    _ = @import("prune.zig");
+    _ = @import("repack.zig");
+    _ = @import("maintenance.zig");
+    _ = @import("pack_refs.zig");
+    _ = @import("reflog_expire.zig");
+    _ = @import("commit_graph_write.zig");
+    _ = @import("pack_objects.zig");
+    _ = @import("diff_stat.zig");
+    _ = @import("diff_rename.zig");
+    _ = @import("word_diff.zig");
+    _ = @import("patience_diff.zig");
+    _ = @import("attributes.zig");
+    _ = @import("hooks.zig");
+    _ = @import("mailmap.zig");
+    _ = @import("sparse_checkout.zig");
+    _ = @import("color.zig");
+    _ = @import("bundle.zig");
+    _ = @import("rerere.zig");
+    _ = @import("range_diff.zig");
+    _ = @import("multi_pack_index.zig");
+    _ = @import("shallow.zig");
+    _ = @import("filter_branch.zig");
+    _ = @import("credential.zig");
+    _ = @import("var.zig");
+    _ = @import("hash_object_ext.zig");
+    _ = @import("ls_files.zig");
+    _ = @import("ls_tree.zig");
+    _ = @import("update_index.zig");
+    _ = @import("write_tree.zig");
+    _ = @import("read_tree.zig");
+    _ = @import("for_each_ref.zig");
+    _ = @import("verify_pack.zig");
+    _ = @import("symbolic_ref.zig");
+    _ = @import("check_ignore.zig");
+    _ = @import("diff_tree.zig");
+    _ = @import("submodule.zig");
+    _ = @import("submodule_config.zig");
+    _ = @import("apply.zig");
+    _ = @import("format_patch.zig");
+    _ = @import("am.zig");
+    _ = @import("send_email.zig");
+    _ = @import("patch.zig");
 }
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -145,18 +222,35 @@ const usage =
     \\  shortlog     Summarize 'git log' output
     \\  notes        Add or inspect object notes
     \\
-    \\Plumbing:
-    \\  cat-file     Provide content or type and size information for repository objects
-    \\  hash-object  Compute object ID and optionally creates a blob from a file
-    \\  rev-parse    Pick out and massage parameters
-    \\  config       Get and set repository or global options
-    \\  reflog       Show reference logs
-    \\  count-objects Count unpacked number of objects and their disk consumption
-    \\  fsck         Verify the connectivity and validity of objects
-    \\  worktree     Manage multiple working trees
-    \\  archive      Create an archive of files from a named tree
+    \\Maintenance:
+    \\  gc           Run garbage collection
+    \\  prune        Remove unreachable loose objects
+    \\  repack       Repack objects into pack files
+    \\  maintenance  Run maintenance tasks
+    \\  pack-refs    Pack loose refs into packed-refs file
     \\
-    \\  version      Display version information
+    \\Plumbing:
+    \\  cat-file       Provide content or type and size info for objects
+    \\  hash-object    Compute object ID and optionally create a blob
+    \\  rev-parse      Pick out and massage parameters
+    \\  config         Get and set repository or global options
+    \\  reflog         Show reference logs
+    \\  count-objects  Count unpacked objects and disk consumption
+    \\  fsck           Verify connectivity and validity of objects
+    \\  worktree       Manage multiple working trees
+    \\  archive        Create an archive of files from a named tree
+    \\  ls-files       Show information about files in index/working tree
+    \\  ls-tree        List the contents of a tree object
+    \\  update-index   Register file contents in the working tree to index
+    \\  write-tree     Create a tree object from the current index
+    \\  read-tree      Read tree information into the index
+    \\  for-each-ref   Output information on each ref
+    \\  verify-pack    Validate packed Git archive files
+    \\  symbolic-ref   Read, modify, and delete symbolic refs
+    \\  check-ignore   Debug gitignore / exclude files
+    \\  diff-tree      Compare the content and mode of trees
+    \\
+    \\  version        Display version information
     \\
 ;
 
@@ -255,6 +349,39 @@ pub fn main() !void {
     if (std.mem.eql(u8, command, "bisect")) return runBisectCmd(allocator, args[2..]);
     if (std.mem.eql(u8, command, "worktree")) return runWorktreeCmd(allocator, args[2..]);
     if (std.mem.eql(u8, command, "archive")) return runArchiveCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "gc")) return runGcCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "prune")) return runPruneCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "repack")) return runRepackCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "maintenance")) return runMaintenanceCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "pack-refs")) return runPackRefsCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "bundle")) return runBundleCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "rerere")) return runRerereCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "range-diff")) return runRangeDiffCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "multi-pack-index")) return runMultiPackIndexCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "filter-branch")) return runFilterBranchCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "credential")) return runCredentialCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "var")) return runVarCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "mktag")) return runMktagCmd(allocator);
+    if (std.mem.eql(u8, command, "mktree")) return runMktreeCmd(allocator);
+    if (std.mem.eql(u8, command, "commit-tree")) return runCommitTreeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "check-attr")) return runCheckAttrCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "hook")) return runHookCmdDispatch(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "sparse-checkout")) return runSparseCheckoutCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "ls-files")) return runLsFilesCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "ls-tree")) return runLsTreeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "update-index")) return runUpdateIndexCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "write-tree")) return runWriteTreeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "read-tree")) return runReadTreeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "for-each-ref")) return runForEachRefCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "verify-pack")) return runVerifyPackCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "symbolic-ref")) return runSymbolicRefCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "check-ignore")) return runCheckIgnoreCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "diff-tree")) return runDiffTreeCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "submodule")) return runSubmoduleCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "apply")) return runApplyCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "format-patch")) return runFormatPatchCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "am")) return runAmCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "send-email")) return runSendEmailCmd(allocator, args[2..]);
 
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "zig-git: '{s}' is not a zig-git command.\n\n", .{command}) catch {
@@ -698,6 +825,22 @@ fn runReflogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var repo = discoverRepo(allocator);
     defer repo.deinit();
 
+    // Check for subcommands: expire, delete
+    if (args.len > 0) {
+        if (std.mem.eql(u8, args[0], "expire")) {
+            reflog_expire_mod.runReflogExpire(&repo, allocator, args[1..]) catch |err| {
+                fatalError("reflog expire failed", err);
+            };
+            return;
+        }
+        if (std.mem.eql(u8, args[0], "delete")) {
+            reflog_expire_mod.runReflogDelete(&repo, allocator, args[1..]) catch |err| {
+                fatalError("reflog delete failed", err);
+            };
+            return;
+        }
+    }
+
     var ref_name: []const u8 = "HEAD";
     if (args.len > 0 and !std.mem.startsWith(u8, args[0], "-")) {
         ref_name = args[0];
@@ -852,6 +995,278 @@ fn runArchiveCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     defer repo.deinit();
     archive_mod.runArchive(&repo, allocator, args) catch |err| {
         fatalError("archive failed", err);
+    };
+}
+
+// --- Maintenance commands ---
+
+fn runGcCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    gc_mod.runGc(&repo, allocator, args) catch |err| {
+        fatalError("gc failed", err);
+    };
+}
+
+fn runPruneCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    prune_mod.runPrune(&repo, allocator, args) catch |err| {
+        fatalError("prune failed", err);
+    };
+}
+
+fn runRepackCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    repack_mod_cmd.runRepack(&repo, allocator, args) catch |err| {
+        fatalError("repack failed", err);
+    };
+}
+
+fn runMaintenanceCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    maintenance_mod.runMaintenance(&repo, allocator, args) catch |err| {
+        fatalError("maintenance failed", err);
+    };
+}
+
+fn runPackRefsCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    pack_refs_mod.runPackRefs(&repo, allocator, args) catch |err| {
+        fatalError("pack-refs failed", err);
+    };
+}
+
+// --- New advanced commands ---
+
+fn runBundleCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    bundle_mod.runBundle(&repo, allocator, args) catch |err| {
+        fatalError("bundle failed", err);
+    };
+}
+
+fn runRerereCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    rerere_mod.runRerere(&repo, allocator, args) catch |err| {
+        fatalError("rerere failed", err);
+    };
+}
+
+fn runRangeDiffCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    range_diff_mod.runRangeDiff(&repo, allocator, args) catch |err| {
+        fatalError("range-diff failed", err);
+    };
+}
+
+fn runMultiPackIndexCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    multi_pack_index_mod.runMultiPackIndex(&repo, allocator, args) catch |err| {
+        fatalError("multi-pack-index failed", err);
+    };
+}
+
+fn runFilterBranchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    filter_branch_mod.runFilterBranch(&repo, allocator, args) catch |err| {
+        fatalError("filter-branch failed", err);
+    };
+}
+
+fn runCredentialCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    credential_mod.runCredential(&repo, allocator, args) catch |err| {
+        fatalError("credential failed", err);
+    };
+}
+
+fn runVarCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    var_mod.runVar(&repo, allocator, args) catch |err| {
+        fatalError("var failed", err);
+    };
+}
+
+fn runMktagCmd(allocator: std.mem.Allocator) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    hash_object_ext_mod.mkTag(allocator, &repo) catch |err| {
+        fatalError("mktag failed", err);
+    };
+}
+
+fn runMktreeCmd(allocator: std.mem.Allocator) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    hash_object_ext_mod.mkTree(allocator, &repo) catch |err| {
+        fatalError("mktree failed", err);
+    };
+}
+
+fn runCommitTreeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    hash_object_ext_mod.commitTree(allocator, &repo, args) catch |err| {
+        fatalError("commit-tree failed", err);
+    };
+}
+
+// --- Attribute, hook, and sparse checkout commands ---
+
+fn runCheckAttrCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    attributes_mod.runCheckAttr(allocator, repo.git_dir, args) catch |err| {
+        fatalError("check-attr failed", err);
+    };
+}
+
+fn runHookCmdDispatch(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    hooks_mod.runHookCmd(allocator, repo.git_dir, args) catch |err| {
+        fatalError("hook failed", err);
+    };
+}
+
+fn runSparseCheckoutCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    sparse_checkout_mod.runSparseCheckout(&repo, allocator, args) catch |err| {
+        fatalError("sparse-checkout failed", err);
+    };
+}
+
+// --- Plumbing commands (new) ---
+
+fn runLsFilesCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    ls_files_mod.runLsFiles(&repo, allocator, args) catch |err| {
+        fatalError("ls-files failed", err);
+    };
+}
+
+fn runLsTreeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    ls_tree_mod.runLsTree(&repo, allocator, args) catch |err| {
+        fatalError("ls-tree failed", err);
+    };
+}
+
+fn runUpdateIndexCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    update_index_mod.runUpdateIndex(&repo, allocator, args) catch |err| {
+        fatalError("update-index failed", err);
+    };
+}
+
+fn runWriteTreeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    write_tree_mod.runWriteTree(&repo, allocator, args) catch |err| {
+        fatalError("write-tree failed", err);
+    };
+}
+
+fn runReadTreeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    read_tree_mod.runReadTree(&repo, allocator, args) catch |err| {
+        fatalError("read-tree failed", err);
+    };
+}
+
+fn runForEachRefCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    for_each_ref_mod.runForEachRef(&repo, allocator, args) catch |err| {
+        fatalError("for-each-ref failed", err);
+    };
+}
+
+fn runVerifyPackCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    verify_pack_mod.runVerifyPack(allocator, args) catch |err| {
+        fatalError("verify-pack failed", err);
+    };
+}
+
+fn runSymbolicRefCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    symbolic_ref_mod.runSymbolicRef(&repo, allocator, args) catch |err| {
+        fatalError("symbolic-ref failed", err);
+    };
+}
+
+fn runCheckIgnoreCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    check_ignore_mod.runCheckIgnore(&repo, allocator, args) catch |err| {
+        fatalError("check-ignore failed", err);
+    };
+}
+
+fn runDiffTreeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    diff_tree_mod.runDiffTree(&repo, allocator, args) catch |err| {
+        fatalError("diff-tree failed", err);
+    };
+}
+
+// --- Submodule, Apply, Format-patch, Am, Send-email ---
+
+fn runSubmoduleCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    submodule_mod.runSubmodule(&repo, allocator, args) catch |err| {
+        fatalError("submodule failed", err);
+    };
+}
+
+fn runApplyCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    apply_mod_cmd.runApply(&repo, allocator, args) catch |err| {
+        fatalError("apply failed", err);
+    };
+}
+
+fn runFormatPatchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    format_patch_mod.runFormatPatch(&repo, allocator, args) catch |err| {
+        fatalError("format-patch failed", err);
+    };
+}
+
+fn runAmCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    am_mod.runAm(&repo, allocator, args) catch |err| {
+        fatalError("am failed", err);
+    };
+}
+
+fn runSendEmailCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    send_email_mod.runSendEmail(&repo, allocator, args) catch |err| {
+        fatalError("send-email failed", err);
     };
 }
 
