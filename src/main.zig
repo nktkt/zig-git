@@ -74,6 +74,18 @@ const apply_mod_cmd = @import("apply.zig");
 const format_patch_mod = @import("format_patch.zig");
 const am_mod = @import("am.zig");
 const send_email_mod = @import("send_email.zig");
+const rev_list_mod = @import("rev_list.zig");
+const diff_files_mod = @import("diff_files.zig");
+const diff_index_mod = @import("diff_index.zig");
+const name_rev_mod = @import("name_rev.zig");
+const merge_base_mod = @import("merge_base.zig");
+const verify_commit_mod = @import("verify_commit.zig");
+const commit_info_mod = @import("commit_info.zig");
+const log_format_mod = @import("log_format.zig");
+const add_interactive_mod = @import("add_interactive.zig");
+const tag_verify_mod = @import("tag_verify.zig");
+const merge_strategies_mod = @import("merge_strategies.zig");
+const config_ext_mod = @import("config_ext.zig");
 
 comptime {
     _ = @import("hash.zig");
@@ -172,6 +184,24 @@ comptime {
     _ = @import("am.zig");
     _ = @import("send_email.zig");
     _ = @import("patch.zig");
+    _ = @import("rev_list.zig");
+    _ = @import("diff_files.zig");
+    _ = @import("diff_index.zig");
+    _ = @import("name_rev.zig");
+    _ = @import("merge_base.zig");
+    _ = @import("verify_commit.zig");
+    _ = @import("commit_info.zig");
+    _ = @import("refspec.zig");
+    _ = @import("protocol_v2.zig");
+    _ = @import("index_ext.zig");
+    _ = @import("trace.zig");
+    _ = @import("progress.zig");
+    _ = @import("pathspec.zig");
+    _ = @import("log_format.zig");
+    _ = @import("add_interactive.zig");
+    _ = @import("tag_verify.zig");
+    _ = @import("merge_strategies.zig");
+    _ = @import("config_ext.zig");
 }
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -249,6 +279,13 @@ const usage =
     \\  symbolic-ref   Read, modify, and delete symbolic refs
     \\  check-ignore   Debug gitignore / exclude files
     \\  diff-tree      Compare the content and mode of trees
+    \\  rev-list       List commit objects in reverse chronological order
+    \\  diff-files     Compare files in the working tree and the index
+    \\  diff-index     Compare a tree to the working tree or index
+    \\  name-rev       Find symbolic names for given revs
+    \\  merge-base     Find common ancestor of two commits
+    \\  verify-commit  Check the GPG signature of commits
+    \\  verify-tag     Check the GPG signature of tags
     \\
     \\  version        Display version information
     \\
@@ -382,6 +419,13 @@ pub fn main() !void {
     if (std.mem.eql(u8, command, "format-patch")) return runFormatPatchCmd(allocator, args[2..]);
     if (std.mem.eql(u8, command, "am")) return runAmCmd(allocator, args[2..]);
     if (std.mem.eql(u8, command, "send-email")) return runSendEmailCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "rev-list")) return runRevListCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "diff-files")) return runDiffFilesCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "diff-index")) return runDiffIndexCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "name-rev")) return runNameRevCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "merge-base")) return runMergeBaseCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "verify-commit")) return runVerifyCommitCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "verify-tag")) return runVerifyTagCmd(allocator, args[2..]);
 
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "zig-git: '{s}' is not a zig-git command.\n\n", .{command}) catch {
@@ -554,6 +598,34 @@ fn runConfig(allocator: std.mem.Allocator, args: []const []const u8) !void {
         std.process.exit(1);
     }
 
+    // Check for extended config flags that config_ext handles
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "--global") or
+            std.mem.eql(u8, arg, "--system") or
+            std.mem.eql(u8, arg, "--unset") or
+            std.mem.eql(u8, arg, "--unset-all") or
+            std.mem.eql(u8, arg, "--rename-section") or
+            std.mem.eql(u8, arg, "--remove-section") or
+            std.mem.eql(u8, arg, "-e") or
+            std.mem.eql(u8, arg, "--edit"))
+        {
+            // Use the extended config handler
+            var repo_ptr: ?*repository.Repository = null;
+            var repo_val: repository.Repository = undefined;
+            const repo_opt = repository.Repository.discover(allocator, null) catch null;
+            if (repo_opt) |r| {
+                repo_val = r;
+                repo_ptr = &repo_val;
+            }
+            defer if (repo_ptr != null) repo_val.deinit();
+
+            config_ext_mod.runConfigExt(repo_ptr, allocator, args) catch |err| {
+                fatalError("config failed", err);
+            };
+            return;
+        }
+    }
+
     var repo = discoverRepo(allocator);
     defer repo.deinit();
 
@@ -655,6 +727,17 @@ fn runStatusCmd(allocator: std.mem.Allocator) !void {
 fn runAddCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var repo = discoverRepo(allocator);
     defer repo.deinit();
+
+    // Check for -p / --patch flag
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--patch")) {
+            add_interactive_mod.runInteractiveAdd(&repo, allocator, args, .add_patch) catch |err| {
+                fatalError("add -p failed", err);
+            };
+            return;
+        }
+    }
+
     add_mod.runAdd(&repo, allocator, args) catch |err| {
         fatalError("add failed", err);
     };
@@ -696,9 +779,11 @@ fn runLogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     defer repo.deinit();
 
     var opts = log_mod.LogOptions{};
+    var fmt_opts = log_format_mod.LogFormatOptions{};
+    var use_advanced_format = false;
+
     for (args) |arg| {
         if (std.mem.startsWith(u8, arg, "-n") or std.mem.startsWith(u8, arg, "--max-count=")) {
-            // Parse max count
             const val = if (std.mem.startsWith(u8, arg, "-n"))
                 arg[2..]
             else
@@ -708,14 +793,52 @@ fn runLogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
             opts.format = .oneline;
         } else if (std.mem.eql(u8, arg, "--graph")) {
             opts.graph = true;
+        } else if (std.mem.startsWith(u8, arg, "--format=") or std.mem.startsWith(u8, arg, "--pretty=")) {
+            fmt_opts = log_format_mod.parseFormatOption(arg);
+            use_advanced_format = true;
+        } else if (std.mem.startsWith(u8, arg, "--date=")) {
+            fmt_opts.date_format = log_format_mod.parseDateOption(arg);
+            use_advanced_format = true;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.start_ref = arg;
         }
     }
 
-    log_mod.runLog(&repo, allocator, opts, stdout_file) catch |err| {
-        fatalError("log failed", err);
-    };
+    if (use_advanced_format) {
+        // Use advanced formatting engine
+        const start_oid = repo.resolveRef(allocator, opts.start_ref) catch |err| {
+            switch (err) {
+                error.ObjectNotFound => return,
+                else => {
+                    fatalError("log failed", err);
+                },
+            }
+        };
+
+        var dmap = log_format_mod.buildDecorationMap(allocator, &repo) catch {
+            fatalError("log failed", error.OutOfMemory);
+        };
+        defer dmap.deinit();
+
+        var walker = log_mod.CommitWalker.init(allocator, &repo);
+        defer walker.deinit();
+        walker.push(start_oid) catch |err| {
+            fatalError("log failed", err);
+        };
+
+        var count: usize = 0;
+        while (walker.next() catch null) |oid| {
+            if (opts.max_count > 0 and count >= opts.max_count) break;
+            var commit = log_mod.parseCommit(allocator, &repo, &oid) catch continue;
+            defer commit.deinit();
+            log_format_mod.formatCommit(stdout_file, &commit, &fmt_opts, &dmap, count) catch continue;
+            count += 1;
+        }
+    } else {
+        log_mod.runLog(&repo, allocator, opts, stdout_file) catch |err| {
+            fatalError("log failed", err);
+        };
+    }
 }
 
 fn runShowCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
@@ -756,6 +879,102 @@ fn runBranchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
 fn runTagCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var repo = discoverRepo(allocator);
     defer repo.deinit();
+
+    // Check for advanced tag options
+    var annotated = false;
+    var verify = false;
+    var sort_version = false;
+    var contains_ref: ?[]const u8 = null;
+    var merged_ref: ?[]const u8 = null;
+    var message: ?[]const u8 = null;
+    var format_str: ?[]const u8 = null;
+
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const arg = args[i];
+        if (std.mem.eql(u8, arg, "-a") or std.mem.eql(u8, arg, "--annotate")) {
+            annotated = true;
+        } else if (std.mem.eql(u8, arg, "-v") or std.mem.eql(u8, arg, "--verify")) {
+            verify = true;
+        } else if (std.mem.eql(u8, arg, "-m") or std.mem.eql(u8, arg, "--message")) {
+            i += 1;
+            if (i < args.len) message = args[i];
+        } else if (std.mem.startsWith(u8, arg, "--sort=version:refname") or std.mem.startsWith(u8, arg, "--sort=v:refname")) {
+            sort_version = true;
+        } else if (std.mem.startsWith(u8, arg, "--contains")) {
+            if (std.mem.startsWith(u8, arg, "--contains=")) {
+                contains_ref = arg["--contains=".len..];
+            } else {
+                i += 1;
+                if (i < args.len) contains_ref = args[i];
+            }
+        } else if (std.mem.startsWith(u8, arg, "--merged")) {
+            if (std.mem.startsWith(u8, arg, "--merged=")) {
+                merged_ref = arg["--merged=".len..];
+            } else {
+                i += 1;
+                if (i < args.len) merged_ref = args[i];
+            }
+        } else if (std.mem.startsWith(u8, arg, "--format=")) {
+            format_str = arg["--format=".len..];
+        }
+    }
+
+    if (verify) {
+        // Find tag name to verify
+        for (args) |arg| {
+            if (!std.mem.startsWith(u8, arg, "-")) {
+                tag_verify_mod.verifyTag(&repo, allocator, arg) catch |err| {
+                    fatalError("tag verify failed", err);
+                };
+                return;
+            }
+        }
+        try stderr_file.writeAll("fatal: tag name required for --verify\n");
+        std.process.exit(1);
+    }
+
+    if (contains_ref) |cr| {
+        tag_verify_mod.listTagsContaining(&repo, allocator, cr) catch |err| {
+            fatalError("tag --contains failed", err);
+        };
+        return;
+    }
+
+    if (merged_ref) |mr| {
+        tag_verify_mod.listTagsMerged(&repo, allocator, mr) catch |err| {
+            fatalError("tag --merged failed", err);
+        };
+        return;
+    }
+
+    if (sort_version or format_str != null) {
+        const sort_mode: tag_verify_mod.TagSortMode = if (sort_version) .version else .alpha;
+        tag_verify_mod.listTagsSorted(&repo, allocator, sort_mode, null, format_str) catch |err| {
+            fatalError("tag list failed", err);
+        };
+        return;
+    }
+
+    if (annotated and message != null) {
+        // Find tag name
+        for (args) |arg| {
+            if (!std.mem.startsWith(u8, arg, "-") and !std.mem.eql(u8, arg, message.?)) {
+                const tag_oid = tag_verify_mod.createAnnotatedTag(allocator, &repo, arg, null, message.?) catch |err| {
+                    fatalError("tag failed", err);
+                };
+                const hex = tag_oid.toHex();
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "Created annotated tag object {s}\n", .{hex[0..7]}) catch return;
+                try stdout_file.writeAll(msg);
+                return;
+            }
+        }
+        try stderr_file.writeAll("fatal: tag name required\n");
+        std.process.exit(1);
+    }
+
+    // Fallback to existing tag implementation
     tag_mod.runTag(&repo, allocator, args) catch |err| {
         fatalError("tag failed", err);
     };
@@ -764,6 +983,17 @@ fn runTagCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
 fn runCheckoutCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var repo = discoverRepo(allocator);
     defer repo.deinit();
+
+    // Check for -p / --patch flag
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--patch")) {
+            add_interactive_mod.runInteractiveAdd(&repo, allocator, args, .checkout_patch) catch |err| {
+                fatalError("checkout -p failed", err);
+            };
+            return;
+        }
+    }
+
     checkout_mod.runCheckout(&repo, allocator, args) catch |err| {
         fatalError("checkout failed", err);
     };
@@ -782,6 +1012,17 @@ fn runMergeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
 fn runResetCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var repo = discoverRepo(allocator);
     defer repo.deinit();
+
+    // Check for -p / --patch flag
+    for (args) |arg| {
+        if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--patch")) {
+            add_interactive_mod.runInteractiveAdd(&repo, allocator, args, .reset_patch) catch |err| {
+                fatalError("reset -p failed", err);
+            };
+            return;
+        }
+    }
+
     reset_mod.runReset(&repo, allocator, args) catch |err| {
         fatalError("reset failed", err);
     };
@@ -1267,6 +1508,64 @@ fn runSendEmailCmd(allocator: std.mem.Allocator, args: []const []const u8) !void
     defer repo.deinit();
     send_email_mod.runSendEmail(&repo, allocator, args) catch |err| {
         fatalError("send-email failed", err);
+    };
+}
+
+// --- Rev-list, Diff-files, Diff-index, Name-rev, Merge-base, Verify-commit/tag ---
+
+fn runRevListCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    rev_list_mod.runRevList(&repo, allocator, args) catch |err| {
+        fatalError("rev-list failed", err);
+    };
+}
+
+fn runDiffFilesCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    diff_files_mod.runDiffFiles(&repo, allocator, args) catch |err| {
+        fatalError("diff-files failed", err);
+    };
+}
+
+fn runDiffIndexCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    diff_index_mod.runDiffIndex(&repo, allocator, args) catch |err| {
+        fatalError("diff-index failed", err);
+    };
+}
+
+fn runNameRevCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    name_rev_mod.runNameRev(&repo, allocator, args) catch |err| {
+        fatalError("name-rev failed", err);
+    };
+}
+
+fn runMergeBaseCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    merge_base_mod.runMergeBase(&repo, allocator, args) catch |err| {
+        fatalError("merge-base failed", err);
+    };
+}
+
+fn runVerifyCommitCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    verify_commit_mod.runVerifyCommit(&repo, allocator, args) catch |err| {
+        fatalError("verify-commit failed", err);
+    };
+}
+
+fn runVerifyTagCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    verify_commit_mod.runVerifyTag(&repo, allocator, args) catch |err| {
+        fatalError("verify-tag failed", err);
     };
 }
 
