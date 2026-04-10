@@ -105,6 +105,11 @@ pub fn runCherryPick(
 
     const parent_oid = cherry_parents.items[0]; // Use first parent
 
+    // Resolve parent commit's tree
+    var parent_obj = try repo.readObject(allocator, &parent_oid);
+    defer parent_obj.deinit();
+    const parent_tree_oid = try tree_diff.getCommitTreeOid(parent_obj.data);
+
     // Get the commit message
     const cherry_message = extractCommitMessage(cherry_obj.data);
 
@@ -119,8 +124,8 @@ pub fn runCherryPick(
     defer head_obj.deinit();
     const head_tree_oid = try tree_diff.getCommitTreeOid(head_obj.data);
 
-    // Diff: parent -> cherry (the changes we want to apply)
-    var changes = try tree_diff.diffTrees(repo, allocator, &parent_oid, &cherry_tree_oid);
+    // Diff: parent tree -> cherry tree (the changes we want to apply)
+    var changes = try tree_diff.diffTrees(repo, allocator, &parent_tree_oid, &cherry_tree_oid);
     defer changes.deinit();
 
     // Read the parent tree for three-way merge base

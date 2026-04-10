@@ -95,7 +95,10 @@ fn createWorkTreeTree(
             const data = content[0..n];
 
             // Write as blob
-            oid = loose.writeLooseObject(allocator, repo.git_dir, .blob, data) catch entry.oid;
+            oid = loose.writeLooseObject(allocator, repo.git_dir, .blob, data) catch |err| switch (err) {
+                error.PathAlreadyExists => computeBlobOid(data),
+                else => entry.oid,
+            };
         }
 
         const path_copy = try allocator.alloc(u8, entry.name.len);
@@ -200,7 +203,24 @@ fn createTreeFromFlat(
         try tree_data.appendSlice(&item.oid.bytes);
     }
 
-    return loose.writeLooseObject(allocator, git_dir, .tree, tree_data.items);
+    return loose.writeLooseObject(allocator, git_dir, .tree, tree_data.items) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            // Object already exists — compute the OID and return it.
+            var header_buf: [64]u8 = undefined;
+            var hstream = std.io.fixedBufferStream(&header_buf);
+            const hwriter = hstream.writer();
+            hwriter.writeAll("tree ") catch unreachable;
+            hwriter.print("{d}", .{tree_data.items.len}) catch unreachable;
+            hwriter.writeByte(0) catch unreachable;
+            const header = header_buf[0..hstream.pos];
+
+            var hasher = hash_mod.Sha1.init(.{});
+            hasher.update(header);
+            hasher.update(tree_data.items);
+            return types.ObjectId{ .bytes = hasher.finalResult() };
+        },
+        else => return err,
+    };
 }
 
 /// Create a commit object.
@@ -372,8 +392,10 @@ fn stashPush(
     };
 
     // Create a tree from the current working tree state
-    const worktree_tree_oid = createWorkTreeTree(allocator, repo) catch {
-        try stderr_file.writeAll("fatal: failed to create stash tree\n");
+    const worktree_tree_oid = createWorkTreeTree(allocator, repo) catch |err| {
+        var buf: [256]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "fatal: failed to create stash tree: {s}\n", .{@errorName(err)}) catch "fatal: failed to create stash tree\n";
+        try stderr_file.writeAll(msg);
         std.process.exit(128);
     };
 
@@ -638,6 +660,22 @@ fn stashDrop(
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "Dropped stash@{{{d}}}\n", .{stash_index}) catch "Dropped stash\n";
     try stdout_file.writeAll(msg);
+}
+
+/// Compute the blob OID without writing (for when the object already exists).
+fn computeBlobOid(data: []const u8) types.ObjectId {
+    var header_buf: [64]u8 = undefined;
+    var hstream = std.io.fixedBufferStream(&header_buf);
+    const hwriter = hstream.writer();
+    hwriter.writeAll("blob ") catch unreachable;
+    hwriter.print("{d}", .{data.len}) catch unreachable;
+    hwriter.writeByte(0) catch unreachable;
+    const header = header_buf[0..hstream.pos];
+
+    var hasher = hash_mod.Sha1.init(.{});
+    hasher.update(header);
+    hasher.update(data);
+    return types.ObjectId{ .bytes = hasher.finalResult() };
 }
 
 fn mkdirRecursive(path: []const u8) !void {

@@ -99,8 +99,11 @@ pub fn writeLooseObject(allocator: std.mem.Allocator, git_dir: []const u8, obj_t
         else => return err,
     };
 
-    // Write file
-    const file = try std.fs.createFileAbsolute(full_path, .{ .exclusive = true });
+    // Write file (if it already exists, object is identical — content-addressable)
+    const file = std.fs.createFileAbsolute(full_path, .{ .exclusive = true }) catch |err| switch (err) {
+        error.PathAlreadyExists => return oid,
+        else => return err,
+    };
     defer file.close();
     try file.writeAll(compressed);
 

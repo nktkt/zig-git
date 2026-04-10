@@ -124,7 +124,7 @@ pub fn computeDiffFiles(
                 .old_oid = entry.oid,
                 .new_oid = types.ObjectId.ZERO,
                 .status = 'U',
-                .path = entry.name,
+                .path = try allocator.dupe(u8, entry.name),
                 .unmerged = true,
             });
             continue;
@@ -143,7 +143,7 @@ pub fn computeDiffFiles(
                 .old_oid = entry.oid,
                 .new_oid = types.ObjectId.ZERO,
                 .status = 'D',
-                .path = entry.name,
+                .path = try allocator.dupe(u8, entry.name),
                 .unmerged = false,
             });
             continue;
@@ -168,7 +168,7 @@ pub fn computeDiffFiles(
                 .old_oid = entry.oid,
                 .new_oid = types.ObjectId.ZERO,
                 .status = 'M',
-                .path = entry.name,
+                .path = try allocator.dupe(u8, entry.name),
                 .unmerged = false,
             });
             continue;
@@ -197,7 +197,7 @@ pub fn computeDiffFiles(
             .old_oid = entry.oid,
             .new_oid = new_oid,
             .status = 'M',
-            .path = entry.name,
+            .path = try allocator.dupe(u8, entry.name),
             .unmerged = false,
         });
     }
@@ -206,24 +206,38 @@ pub fn computeDiffFiles(
 }
 
 fn writeRawEntry(entry: *const DiffFileEntry) !void {
-    var buf: [512]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const writer = stream.writer();
-
     const old_hex = entry.old_oid.toHex();
     const new_hex = entry.new_oid.toHex();
 
-    try writer.print(":{d:0>6} {d:0>6} {s} {s} {c}\t", .{
-        entry.old_mode,
-        entry.new_mode,
-        old_hex[0..7],
-        new_hex[0..7],
-        entry.status,
-    });
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
 
-    try stdout_file.writeAll(buf[0..stream.pos]);
-    try stdout_file.writeAll(entry.path);
-    try stdout_file.writeAll("\n");
+    // Build the line manually in buffer
+    const prefix = std.fmt.bufPrint(buf[pos..], ":{o:0>6} {o:0>6} ", .{ entry.old_mode, entry.new_mode }) catch return;
+    pos += prefix.len;
+    @memcpy(buf[pos..][0..7], old_hex[0..7]);
+    pos += 7;
+    buf[pos] = ' ';
+    pos += 1;
+    @memcpy(buf[pos..][0..7], new_hex[0..7]);
+    pos += 7;
+    buf[pos] = ' ';
+    pos += 1;
+    buf[pos] = entry.status;
+    pos += 1;
+    buf[pos] = '\t';
+    pos += 1;
+    if (entry.path.len + pos + 1 <= buf.len) {
+        @memcpy(buf[pos..][0..entry.path.len], entry.path);
+        pos += entry.path.len;
+        buf[pos] = '\n';
+        pos += 1;
+        try stdout_file.writeAll(buf[0..pos]);
+    } else {
+        try stdout_file.writeAll(buf[0..pos]);
+        try stdout_file.writeAll(entry.path);
+        try stdout_file.writeAll("\n");
+    }
 }
 
 fn computeBlobOid(data: []const u8) types.ObjectId {

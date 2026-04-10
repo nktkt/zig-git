@@ -167,8 +167,10 @@ fn computeBlame(
     errdefer result.deinit();
 
     // Get the current file content at the starting commit
+    // current_lines.data ownership transfers to result.strings (BlameEntry.content
+    // holds slices into it, so it must outlive the entries)
     const current_lines = try getFileLines(allocator, repo, start_oid, file_path);
-    defer allocator.free(current_lines.data);
+    try result.strings.append(current_lines.data);
     defer allocator.free(current_lines.lines);
 
     if (current_lines.lines.len == 0) return result;
@@ -605,25 +607,21 @@ fn outputBlameLine(
     max_author_len: usize,
     line_num_width: usize,
 ) !void {
-    var buf: [8192]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    const writer = stream.writer();
-
     // Short SHA
     const hex = entry.commit_oid.toHex();
     if (opts.color) {
-        try writer.writeAll(COLOR_YELLOW);
+        try stdout_file.writeAll(COLOR_YELLOW);
     }
-    try writer.writeAll(hex[0..8]);
+    try stdout_file.writeAll(hex[0..8]);
     if (opts.color) {
-        try writer.writeAll(COLOR_RESET);
+        try stdout_file.writeAll(COLOR_RESET);
     }
-    try writer.writeByte(' ');
+    try stdout_file.writeAll(" ");
 
     // Author name (padded)
-    try writer.writeByte('(');
+    try stdout_file.writeAll("(");
     if (opts.color) {
-        try writer.writeAll(COLOR_GREEN);
+        try stdout_file.writeAll(COLOR_GREEN);
     }
 
     const name_display = if (entry.author_name.len > max_author_len)
@@ -631,30 +629,31 @@ fn outputBlameLine(
     else
         entry.author_name;
 
-    try writer.writeAll(name_display);
+    try stdout_file.writeAll(name_display);
 
     // Pad
     var padding = max_author_len - name_display.len;
     while (padding > 0) : (padding -= 1) {
-        try writer.writeByte(' ');
+        try stdout_file.writeAll(" ");
     }
 
     if (opts.color) {
-        try writer.writeAll(COLOR_RESET);
+        try stdout_file.writeAll(COLOR_RESET);
     }
 
-    try writer.writeByte(' ');
+    try stdout_file.writeAll(" ");
 
     // Date
     if (opts.color) {
-        try writer.writeAll(COLOR_CYAN);
+        try stdout_file.writeAll(COLOR_CYAN);
     }
-    try formatTimestamp(writer, entry.author_time);
+    const date_str = formatTimestamp(entry.author_time);
+    try stdout_file.writeAll(&date_str);
     if (opts.color) {
-        try writer.writeAll(COLOR_RESET);
+        try stdout_file.writeAll(COLOR_RESET);
     }
 
-    try writer.writeByte(' ');
+    try stdout_file.writeAll(" ");
 
     // Line number (right-aligned)
     {
@@ -662,25 +661,22 @@ fn outputBlameLine(
         const num_str = std.fmt.bufPrint(&num_buf, "{d}", .{entry.line_number}) catch "?";
         var lpad = if (line_num_width > num_str.len) line_num_width - num_str.len else 0;
         while (lpad > 0) : (lpad -= 1) {
-            try writer.writeByte(' ');
+            try stdout_file.writeAll(" ");
         }
-        try writer.writeAll(num_str);
+        try stdout_file.writeAll(num_str);
     }
 
-    try writer.writeAll(") ");
+    try stdout_file.writeAll(") ");
 
-    // Content
-    try writer.writeAll(entry.content);
-    try writer.writeByte('\n');
-
-    try stdout_file.writeAll(buf[0..stream.pos]);
+    // Content — written directly, no buffer size limit
+    try stdout_file.writeAll(entry.content);
+    try stdout_file.writeAll("\n");
 }
 
-/// Format a Unix timestamp into YYYY-MM-DD format.
-fn formatTimestamp(writer: anytype, timestamp: i64) !void {
+/// Format a Unix timestamp into YYYY-MM-DD format, returned as a fixed buffer.
+fn formatTimestamp(timestamp: i64) [10]u8 {
     if (timestamp <= 0) {
-        try writer.writeAll("0000-00-00");
-        return;
+        return "0000-00-00".*;
     }
 
     // Simple date calculation from epoch
@@ -711,7 +707,11 @@ fn formatTimestamp(writer: anytype, timestamp: i64) !void {
     const day = remaining_days + 1;
     const month = m + 1;
 
-    try writer.print("{d:0>4}-{d:0>2}-{d:0>2}", .{ y, month, day });
+    var buf: [10]u8 = undefined;
+    _ = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{ y, month, day }) catch {
+        return "0000-00-00".*;
+    };
+    return buf;
 }
 
 fn isLeapYear(year: u64) bool {
@@ -748,10 +748,8 @@ test "parseLineRange single" {
 }
 
 test "formatTimestamp" {
-    var buf: [64]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buf);
-    try formatTimestamp(stream.writer(), 1609459200); // 2021-01-01 00:00:00 UTC
-    try std.testing.expectEqualStrings("2021-01-01", buf[0..stream.pos]);
+    const result = formatTimestamp(1609459200); // 2021-01-01 00:00:00 UTC
+    try std.testing.expectEqualStrings("2021-01-01", &result);
 }
 
 test "isLeapYear" {

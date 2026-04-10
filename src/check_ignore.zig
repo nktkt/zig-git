@@ -46,6 +46,7 @@ pub fn runCheckIgnore(repo: *repository.Repository, allocator: std.mem.Allocator
     var rules = std.array_list.Managed(IgnoreRule).init(allocator);
     defer {
         for (rules.items) |*r| {
+            allocator.free(r.pattern);
             if (r.source_file_owned) allocator.free(r.source_file);
         }
         rules.deinit();
@@ -241,6 +242,7 @@ fn loadRulesFromPath(
     const n = try file.readAll(data);
 
     var line_num: usize = 0;
+    var first_rule = true;
     var lines = std.mem.splitScalar(u8, data[0..n], '\n');
     while (lines.next()) |raw_line| {
         line_num += 1;
@@ -271,15 +273,24 @@ fn loadRulesFromPath(
             anchored = true;
         }
 
+        // Duplicate the pattern so it outlives the file data buffer
+        const owned_pattern = try allocator.dupe(u8, line);
+
         try rules.append(.{
-            .pattern = line,
+            .pattern = owned_pattern,
             .negated = negated,
             .dir_only = dir_only,
             .anchored = anchored,
             .source_file = source_display,
-            .source_file_owned = false, // The display path is managed by the first caller
+            .source_file_owned = first_rule, // First rule owns the source path allocation
             .line_number = line_num,
         });
+        first_rule = false;
+    }
+
+    // If no rules were added, free the source_display path since no rule owns it
+    if (first_rule) {
+        allocator.free(source_display);
     }
 }
 

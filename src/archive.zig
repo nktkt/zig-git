@@ -245,7 +245,13 @@ fn writeTarArchive(
 
     // Track directories we've already written entries for
     var written_dirs = std.StringHashMap(void).init(allocator);
-    defer written_dirs.deinit();
+    defer {
+        var it = written_dirs.keyIterator();
+        while (it.next()) |key| {
+            allocator.free(key.*);
+        }
+        written_dirs.deinit();
+    }
 
     // Write file entries
     for (flat.entries.items) |*entry| {
@@ -303,10 +309,9 @@ fn writeParentDirs(
 
         try writeTarDirectoryEntry(output, dir_name, mtime);
 
-        // Mark as written
+        // Mark as written (key is freed when written_dirs is cleaned up)
         const key = try allocator.alloc(u8, dir_path.len);
         @memcpy(key, dir_path);
-        // We're intentionally leaking these keys - they're small and last the duration of the archive
         try written_dirs.put(key, {});
     }
 }
