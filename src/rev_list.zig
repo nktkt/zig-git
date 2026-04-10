@@ -4,6 +4,7 @@ const repository = @import("repository.zig");
 const tree_diff = @import("tree_diff.zig");
 const commit_info = @import("commit_info.zig");
 const ref_mod = @import("ref.zig");
+const commit_graph_mod = @import("commit_graph.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
@@ -112,7 +113,7 @@ pub fn runRevList(repo: *repository.Repository, allocator: std.mem.Allocator, ar
     }
 
     // Collect excluded commits
-    var excluded = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator);
+    var excluded = std.AutoHashMap(types.ObjectId, void).init(allocator);
     defer excluded.deinit();
 
     for (range.exclude.items) |exc_oid| {
@@ -123,14 +124,14 @@ pub fn runRevList(repo: *repository.Repository, allocator: std.mem.Allocator, ar
     var result_oids = std.array_list.Managed(types.ObjectId).init(allocator);
     defer result_oids.deinit();
 
-    var visited = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator);
+    var visited = std.AutoHashMap(types.ObjectId, void).init(allocator);
     defer visited.deinit();
 
     // For symmetric diff, we also walk from exclude side and merge
     if (range.symmetric and range.exclude.items.len > 0) {
         // Symmetric: (A...B) = commits in A not in B, plus commits in B not in A
         // We already have excluded set from A. Now collect excluded from B for A's side.
-        var excluded_b = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator);
+        var excluded_b = std.AutoHashMap(types.ObjectId, void).init(allocator);
         defer excluded_b.deinit();
 
         for (range.include.items) |inc_oid| {
@@ -265,30 +266,61 @@ fn collectReachable(
     allocator: std.mem.Allocator,
     repo: *repository.Repository,
     start_oid: types.ObjectId,
-    out: *std.array_list.Managed([types.OID_HEX_LEN]u8),
+    out: *std.AutoHashMap(types.ObjectId, void),
     first_parent: bool,
 ) !void {
+    const GRAPH_NO_PARENT: u32 = 0x70000000;
+    const GRAPH_EXTRA_EDGES: u32 = 0x80000000;
+
     var queue = std.array_list.Managed(types.ObjectId).init(allocator);
     defer queue.deinit();
     try queue.append(start_oid);
 
     while (queue.items.len > 0) {
         const oid = queue.orderedRemove(0);
-        const hex = oid.toHex();
 
-        // Check if already in output
-        var found = false;
-        for (out.items) |*v| {
-            if (std.mem.eql(u8, v, &hex)) {
-                found = true;
-                break;
+        // Check if already in output (O(1) hash lookup)
+        const gop = try out.getOrPut(oid);
+        if (gop.found_existing) continue;
+
+        // Try commit-graph for fast parent resolution
+        if (repo.commit_graph) |*cg| {
+            if (cg.findCommit(&oid)) |idx| {
+                if (cg.getCommitData(idx)) |cdata| {
+                    if (first_parent) {
+                        if (cdata.parent1 != GRAPH_NO_PARENT) {
+                            try queue.append(cg.getOid(cdata.parent1));
+                        }
+                    } else {
+                        if (cdata.parent1 != GRAPH_NO_PARENT) {
+                            try queue.append(cg.getOid(cdata.parent1));
+                        }
+                        if (cdata.parent2 != GRAPH_NO_PARENT) {
+                            if (cdata.parent2 & GRAPH_EXTRA_EDGES != 0) {
+                                const extra_idx = cdata.parent2 & 0x7fffffff;
+                                if (cg.extra_edges_offset) |extra_off| {
+                                    var ei = extra_idx;
+                                    while (true) {
+                                        const edge_offset = extra_off + @as(usize, ei) * 4;
+                                        if (edge_offset + 4 > cg.data.len) break;
+                                        const edge_val = std.mem.readInt(u32, cg.data[edge_offset..][0..4], .big);
+                                        const parent_idx = edge_val & 0x7fffffff;
+                                        try queue.append(cg.getOid(parent_idx));
+                                        if (edge_val & 0x80000000 != 0) break;
+                                        ei += 1;
+                                    }
+                                }
+                            } else {
+                                try queue.append(cg.getOid(cdata.parent2));
+                            }
+                        }
+                    }
+                    continue;
+                } else |_| {}
             }
         }
-        if (found) continue;
 
-        try out.append(hex);
-
-        // Read commit and add parents
+        // Fallback: read commit and add parents
         var obj = repo.readObject(allocator, &oid) catch continue;
         defer obj.deinit();
         if (obj.obj_type != .commit) continue;
@@ -313,11 +345,14 @@ fn walkCommits(
     allocator: std.mem.Allocator,
     repo: *repository.Repository,
     starts: []const types.ObjectId,
-    excluded: *std.array_list.Managed([types.OID_HEX_LEN]u8),
-    visited: *std.array_list.Managed([types.OID_HEX_LEN]u8),
+    excluded: *std.AutoHashMap(types.ObjectId, void),
+    visited: *std.AutoHashMap(types.ObjectId, void),
     result: *std.array_list.Managed(types.ObjectId),
     opts: *const RevListOptions,
 ) !void {
+    const GRAPH_NO_PARENT: u32 = 0x70000000;
+    const GRAPH_EXTRA_EDGES: u32 = 0x80000000;
+
     var queue = std.array_list.Managed(types.ObjectId).init(allocator);
     defer queue.deinit();
 
@@ -327,30 +362,62 @@ fn walkCommits(
 
     while (queue.items.len > 0) {
         const oid = queue.orderedRemove(0);
-        const hex = oid.toHex();
 
-        // Check if visited
-        var already_visited = false;
-        for (visited.items) |*v| {
-            if (std.mem.eql(u8, v, &hex)) {
-                already_visited = true;
-                break;
+        // Check if visited (O(1) hash lookup)
+        const visit_gop = try visited.getOrPut(oid);
+        if (visit_gop.found_existing) continue;
+
+        // Check if excluded (O(1) hash lookup)
+        if (excluded.contains(oid)) continue;
+
+        // Try commit-graph for fast traversal (no object read needed for counting)
+        if (repo.commit_graph) |*cg| {
+            if (cg.findCommit(&oid)) |idx| {
+                if (cg.getCommitData(idx)) |cdata| {
+                    // Apply date filters using commit-graph timestamp
+                    if (opts.since != 0 or opts.until != 0) {
+                        const ts: i64 = @intCast(cdata.timestamp);
+                        if (opts.since != 0 and ts < opts.since) continue;
+                        if (opts.until != 0 and ts > opts.until) continue;
+                    }
+
+                    try result.append(oid);
+
+                    // Add parents from commit-graph
+                    if (opts.first_parent) {
+                        if (cdata.parent1 != GRAPH_NO_PARENT) {
+                            try queue.append(cg.getOid(cdata.parent1));
+                        }
+                    } else {
+                        if (cdata.parent1 != GRAPH_NO_PARENT) {
+                            try queue.append(cg.getOid(cdata.parent1));
+                        }
+                        if (cdata.parent2 != GRAPH_NO_PARENT) {
+                            if (cdata.parent2 & GRAPH_EXTRA_EDGES != 0) {
+                                const extra_idx = cdata.parent2 & 0x7fffffff;
+                                if (cg.extra_edges_offset) |extra_off| {
+                                    var ei = extra_idx;
+                                    while (true) {
+                                        const edge_offset = extra_off + @as(usize, ei) * 4;
+                                        if (edge_offset + 4 > cg.data.len) break;
+                                        const edge_val = std.mem.readInt(u32, cg.data[edge_offset..][0..4], .big);
+                                        const parent_idx = edge_val & 0x7fffffff;
+                                        try queue.append(cg.getOid(parent_idx));
+                                        if (edge_val & 0x80000000 != 0) break;
+                                        ei += 1;
+                                    }
+                                }
+                            } else {
+                                try queue.append(cg.getOid(cdata.parent2));
+                            }
+                        }
+                    }
+                    continue;
+                } else |_| {}
             }
         }
-        if (already_visited) continue;
-        try visited.append(hex);
 
-        // Check if excluded
-        var is_excluded = false;
-        for (excluded.items) |*v| {
-            if (std.mem.eql(u8, v, &hex)) {
-                is_excluded = true;
-                break;
-            }
-        }
-        if (is_excluded) continue;
-
-        // Read commit
+        // Fallback: read commit object
         var obj = repo.readObject(allocator, &oid) catch continue;
         defer obj.deinit();
         if (obj.obj_type != .commit) continue;
@@ -465,10 +532,8 @@ fn isAncestor(allocator: std.mem.Allocator, repo: *repository.Repository, ancest
     defer queue.deinit();
     queue.append(descendant.*) catch return false;
 
-    var visited_list = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator);
-    defer visited_list.deinit();
-
-    const target_hex = ancestor.toHex();
+    var visited_map = std.AutoHashMap(types.ObjectId, void).init(allocator);
+    defer visited_map.deinit();
 
     var iterations: usize = 0;
     const max_iterations: usize = 10000;
@@ -476,19 +541,11 @@ fn isAncestor(allocator: std.mem.Allocator, repo: *repository.Repository, ancest
     while (queue.items.len > 0 and iterations < max_iterations) {
         iterations += 1;
         const oid = queue.orderedRemove(0);
-        const hex = oid.toHex();
 
-        if (std.mem.eql(u8, &hex, &target_hex)) return true;
+        if (oid.eql(ancestor)) return true;
 
-        var found = false;
-        for (visited_list.items) |*v| {
-            if (std.mem.eql(u8, v, &hex)) {
-                found = true;
-                break;
-            }
-        }
-        if (found) continue;
-        visited_list.append(hex) catch continue;
+        const gop = visited_map.getOrPut(oid) catch continue;
+        if (gop.found_existing) continue;
 
         var obj = repo.readObject(allocator, &oid) catch continue;
         defer obj.deinit();
@@ -508,7 +565,7 @@ fn isAncestor(allocator: std.mem.Allocator, repo: *repository.Repository, ancest
 /// Output all objects reachable from the given commits (commits + trees + blobs).
 /// Uses an iterative approach with an explicit stack to avoid recursive error set issues.
 fn outputAllObjects(allocator: std.mem.Allocator, repo: *repository.Repository, commits: []const types.ObjectId) !void {
-    var seen = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator);
+    var seen = std.AutoHashMap(types.ObjectId, void).init(allocator);
     defer seen.deinit();
 
     var stack = std.array_list.Managed(types.ObjectId).init(allocator);
@@ -520,20 +577,12 @@ fn outputAllObjects(allocator: std.mem.Allocator, repo: *repository.Repository, 
 
     while (stack.items.len > 0) {
         const oid = stack.orderedRemove(stack.items.len - 1);
+
+        // Check if already seen (O(1) hash lookup)
+        const gop = seen.getOrPut(oid) catch continue;
+        if (gop.found_existing) continue;
+
         const hex = oid.toHex();
-
-        // Check if already seen
-        var already_seen = false;
-        for (seen.items) |*v| {
-            if (std.mem.eql(u8, v, &hex)) {
-                already_seen = true;
-                break;
-            }
-        }
-        if (already_seen) continue;
-
-        seen.append(hex) catch continue;
-
         stdout_file.writeAll(&hex) catch continue;
         stdout_file.writeAll("\n") catch continue;
 

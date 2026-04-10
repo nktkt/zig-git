@@ -10,23 +10,28 @@ const PACK_HEADER_SIZE = 12;
 const MAX_DELTA_DEPTH = 64;
 
 pub const PackFile = struct {
-    file: std.fs.File,
+    data: []align(std.heap.page_size_min) const u8,
+    data_len: usize,
     num_objects: u32,
     idx: pack_index.PackIndex,
+    file: std.fs.File,
 
     pub fn open(pack_path: []const u8) !PackFile {
         const file = std.fs.openFileAbsolute(pack_path, .{}) catch return error.PackFileNotFound;
         errdefer file.close();
 
-        var header: [PACK_HEADER_SIZE]u8 = undefined;
-        const n = try file.readAll(&header);
-        if (n < PACK_HEADER_SIZE) return error.PackFileTruncated;
-        if (!std.mem.eql(u8, header[0..4], PACK_MAGIC)) return error.InvalidPackFile;
+        const stat = try file.stat();
+        if (stat.size < PACK_HEADER_SIZE) return error.PackFileTruncated;
 
-        const version = std.mem.readInt(u32, header[4..8], .big);
+        const data = try std.posix.mmap(null, stat.size, std.posix.PROT.READ, .{ .TYPE = .PRIVATE }, file.handle, 0);
+        errdefer std.posix.munmap(@constCast(@alignCast(data)));
+
+        if (!std.mem.eql(u8, data[0..4], PACK_MAGIC)) return error.InvalidPackFile;
+
+        const version = std.mem.readInt(u32, data[4..8], .big);
         if (version != PACK_VERSION) return error.UnsupportedPackVersion;
 
-        const num_objects = std.mem.readInt(u32, header[8..12], .big);
+        const num_objects = std.mem.readInt(u32, data[8..12], .big);
 
         var idx_path_buf: [4096]u8 = undefined;
         const idx_path = packToIdxPath(pack_path, &idx_path_buf) orelse return error.PackIndexNotFound;
@@ -35,14 +40,17 @@ pub const PackFile = struct {
         errdefer idx.close();
 
         return PackFile{
-            .file = file,
+            .data = data,
+            .data_len = stat.size,
             .num_objects = num_objects,
             .idx = idx,
+            .file = file,
         };
     }
 
     pub fn close(self: *PackFile) void {
         self.idx.close();
+        std.posix.munmap(@constCast(@alignCast(self.data)));
         self.file.close();
     }
 
@@ -57,21 +65,21 @@ pub const PackFile = struct {
     fn readObjectAtOffset(self: *PackFile, allocator: std.mem.Allocator, offset: u64, depth: u32) !types.Object {
         if (depth > MAX_DELTA_DEPTH) return error.DeltaChainTooDeep;
 
-        try self.file.seekTo(offset);
+        var pos: usize = @intCast(offset);
+        if (pos >= self.data_len) return error.PackFileTruncated;
 
         // Read type and size from variable-length header
-        var first: [1]u8 = undefined;
-        _ = try self.file.readAll(&first);
-        const first_byte = first[0];
+        const first_byte = self.data[pos];
+        pos += 1;
         const raw_type: u3 = @intCast((first_byte >> 4) & 0x07);
         var size: u64 = first_byte & 0x0f;
         var shift: u6 = 4;
 
         if (first_byte & 0x80 != 0) {
             while (true) {
-                var b_buf: [1]u8 = undefined;
-                _ = try self.file.readAll(&b_buf);
-                const b = b_buf[0];
+                if (pos >= self.data_len) return error.PackFileTruncated;
+                const b = self.data[pos];
+                pos += 1;
                 size |= @as(u64, b & 0x7f) << shift;
                 if (b & 0x80 == 0) break;
                 shift = @min(shift + 7, 63);
@@ -81,22 +89,10 @@ pub const PackFile = struct {
         const pack_type = try types.PackObjectType.fromInt(raw_type);
 
         if (pack_type.isBase()) {
-            const current_pos = try self.file.getPos();
-            const remaining = try self.readChunk(allocator, current_pos);
-            defer allocator.free(remaining);
+            const remaining = self.data[pos..self.data_len];
 
-            const data = try compress.zlibInflate(allocator, remaining);
-
-            if (data.len > size) {
-                const trimmed = try allocator.alloc(u8, @intCast(size));
-                @memcpy(trimmed, data[0..@intCast(size)]);
-                allocator.free(data);
-                return types.Object{
-                    .obj_type = try pack_type.toObjectType(),
-                    .data = trimmed,
-                    .allocator = allocator,
-                };
-            }
+            const usize_size: usize = @intCast(size);
+            const data = try compress.zlibInflateKnownSize(allocator, remaining, usize_size);
 
             return types.Object{
                 .obj_type = try pack_type.toObjectType(),
@@ -107,23 +103,20 @@ pub const PackFile = struct {
 
         switch (pack_type) {
             .ofs_delta => {
-                var ob_buf: [1]u8 = undefined;
-                _ = try self.file.readAll(&ob_buf);
-                var delta_offset: u64 = ob_buf[0] & 0x7f;
-                if (ob_buf[0] & 0x80 != 0) {
-                    while (true) {
-                        var b_buf: [1]u8 = undefined;
-                        _ = try self.file.readAll(&b_buf);
-                        delta_offset = (delta_offset + 1) << 7 | (b_buf[0] & 0x7f);
-                        if (b_buf[0] & 0x80 == 0) break;
-                    }
+                if (pos >= self.data_len) return error.PackFileTruncated;
+                var delta_offset: u64 = self.data[pos] & 0x7f;
+                var has_more = self.data[pos] & 0x80 != 0;
+                pos += 1;
+                while (has_more) {
+                    if (pos >= self.data_len) return error.PackFileTruncated;
+                    delta_offset = (delta_offset + 1) << 7 | (self.data[pos] & 0x7f);
+                    has_more = self.data[pos] & 0x80 != 0;
+                    pos += 1;
                 }
 
                 const base_offset = offset - delta_offset;
 
-                const current_pos = try self.file.getPos();
-                const remaining = try self.readChunk(allocator, current_pos);
-                defer allocator.free(remaining);
+                const remaining = self.data[pos..self.data_len];
                 const delta_data = try compress.zlibInflate(allocator, remaining);
                 defer allocator.free(delta_data);
 
@@ -139,12 +132,12 @@ pub const PackFile = struct {
                 };
             },
             .ref_delta => {
+                if (pos + types.OID_RAW_LEN > self.data_len) return error.PackFileTruncated;
                 var base_oid: types.ObjectId = undefined;
-                _ = try self.file.readAll(&base_oid.bytes);
+                @memcpy(&base_oid.bytes, self.data[pos..][0..types.OID_RAW_LEN]);
+                pos += types.OID_RAW_LEN;
 
-                const current_pos = try self.file.getPos();
-                const remaining = try self.readChunk(allocator, current_pos);
-                defer allocator.free(remaining);
+                const remaining = self.data[pos..self.data_len];
                 const delta_data = try compress.zlibInflate(allocator, remaining);
                 defer allocator.free(delta_data);
 
@@ -163,27 +156,6 @@ pub const PackFile = struct {
             },
             else => return error.InvalidPackObjectType,
         }
-    }
-
-    fn readChunk(self: *PackFile, allocator: std.mem.Allocator, start_pos: u64) ![]u8 {
-        const chunk_size: usize = 1024 * 1024;
-        const stat = try self.file.stat();
-        const available = stat.size - start_pos;
-        const to_read: usize = @intCast(@min(available, chunk_size));
-
-        try self.file.seekTo(start_pos);
-        const buf = try allocator.alloc(u8, to_read);
-        errdefer allocator.free(buf);
-
-        const bytes_read = try self.file.readAll(buf);
-        if (bytes_read < to_read) {
-            const trimmed = try allocator.alloc(u8, bytes_read);
-            @memcpy(trimmed, buf[0..bytes_read]);
-            allocator.free(buf);
-            return trimmed;
-        }
-
-        return buf;
     }
 };
 

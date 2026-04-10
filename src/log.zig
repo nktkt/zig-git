@@ -231,15 +231,17 @@ fn buildDecoMap(allocator: std.mem.Allocator, repo: *repository.Repository) !Dec
 // Commit walker
 // ---------------------------------------------------------------------------
 
+const commit_graph_mod = @import("commit_graph.zig");
+
 /// Walks commit history in chronological order (newest first).
-/// Supports topological ordering when walking from multiple starting points.
+/// Uses commit-graph file for fast parent/timestamp lookups when available.
 pub const CommitWalker = struct {
     allocator: std.mem.Allocator,
     repo: *repository.Repository,
     /// Queue of commit OIDs to visit (with timestamps for sorting).
     queue: std.array_list.Managed(QueueEntry),
-    /// Set of already-visited OIDs to avoid duplicates.
-    visited_list: std.array_list.Managed([types.OID_HEX_LEN]u8),
+    /// Set of already-visited OIDs to avoid duplicates (HashMap for O(1) lookup).
+    visited: std.AutoHashMap(types.ObjectId, void),
     /// Follow only first parent of merge commits.
     first_parent: bool = false,
 
@@ -253,13 +255,13 @@ pub const CommitWalker = struct {
             .allocator = allocator,
             .repo = repo,
             .queue = std.array_list.Managed(QueueEntry).init(allocator),
-            .visited_list = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator),
+            .visited = std.AutoHashMap(types.ObjectId, void).init(allocator),
         };
     }
 
     pub fn deinit(self: *CommitWalker) void {
         self.queue.deinit();
-        self.visited_list.deinit();
+        self.visited.deinit();
     }
 
     /// Add a starting commit OID to the walk queue.
@@ -276,39 +278,34 @@ pub const CommitWalker = struct {
             const entry = self.queue.orderedRemove(0);
             const oid = entry.oid;
 
-            // Check if visited
-            const hex = oid.toHex();
-            var already_visited = false;
-            for (self.visited_list.items) |*v| {
-                if (std.mem.eql(u8, v, &hex)) {
-                    already_visited = true;
-                    break;
-                }
-            }
-            if (already_visited) continue;
+            // Check if visited (O(1) hash lookup)
+            const gop = try self.visited.getOrPut(oid);
+            if (gop.found_existing) continue;
 
-            try self.visited_list.append(hex);
-
-            // Read commit to get parents and add them to queue
-            var obj = self.repo.readObject(self.allocator, &oid) catch continue;
-            defer obj.deinit();
-            if (obj.obj_type != .commit) continue;
-
-            // Parse parents
-            var parents = tree_diff.getCommitParents(self.allocator, obj.data) catch continue;
-            defer parents.deinit();
-
-            // Add parents to queue
-            if (self.first_parent) {
-                // Only follow first parent
-                if (parents.items.len > 0) {
-                    const ts = self.getCommitTimestamp(&parents.items[0]);
-                    try self.queue.append(.{ .oid = parents.items[0], .timestamp = ts });
-                }
+            // Try commit-graph for fast parent resolution
+            if (self.resolveParentsFromGraph(&oid)) |_| {
+                // Parents already added to queue by resolveParentsFromGraph
             } else {
-                for (parents.items) |parent_oid| {
-                    const ts = self.getCommitTimestamp(&parent_oid);
-                    try self.queue.append(.{ .oid = parent_oid, .timestamp = ts });
+                // Fallback: read commit object to get parents
+                var obj = self.repo.readObject(self.allocator, &oid) catch continue;
+                defer obj.deinit();
+                if (obj.obj_type != .commit) continue;
+
+                // Parse parents
+                var parents = tree_diff.getCommitParents(self.allocator, obj.data) catch continue;
+                defer parents.deinit();
+
+                // Add parents to queue
+                if (self.first_parent) {
+                    if (parents.items.len > 0) {
+                        const ts = self.getCommitTimestamp(&parents.items[0]);
+                        try self.queue.append(.{ .oid = parents.items[0], .timestamp = ts });
+                    }
+                } else {
+                    for (parents.items) |parent_oid| {
+                        const ts = self.getCommitTimestamp(&parent_oid);
+                        try self.queue.append(.{ .oid = parent_oid, .timestamp = ts });
+                    }
                 }
             }
 
@@ -321,7 +318,80 @@ pub const CommitWalker = struct {
         return null;
     }
 
+    /// Try to resolve parents from commit-graph. Returns true if successful.
+    fn resolveParentsFromGraph(self: *CommitWalker, oid: *const types.ObjectId) ?void {
+        const cg = &(self.repo.commit_graph orelse return null);
+        const idx = cg.findCommit(oid) orelse return null;
+        const cdata = cg.getCommitData(idx) catch return null;
+
+        const GRAPH_NO_PARENT: u32 = 0x70000000;
+        const GRAPH_EXTRA_EDGES: u32 = 0x80000000;
+
+        if (self.first_parent) {
+            if (cdata.parent1 != GRAPH_NO_PARENT) {
+                const parent_oid = cg.getOid(cdata.parent1);
+                const ts = self.getCommitTimestampFromGraph(&parent_oid);
+                self.queue.append(.{ .oid = parent_oid, .timestamp = ts }) catch return null;
+            }
+        } else {
+            // First parent
+            if (cdata.parent1 != GRAPH_NO_PARENT) {
+                const parent_oid = cg.getOid(cdata.parent1);
+                const ts = self.getCommitTimestampFromGraph(&parent_oid);
+                self.queue.append(.{ .oid = parent_oid, .timestamp = ts }) catch return null;
+            }
+
+            // Second parent (may be direct or index into extra edges)
+            if (cdata.parent2 != GRAPH_NO_PARENT) {
+                if (cdata.parent2 & GRAPH_EXTRA_EDGES != 0) {
+                    // Octopus merge: walk extra edges list
+                    const extra_idx = cdata.parent2 & 0x7fffffff;
+                    if (cg.extra_edges_offset) |extra_off| {
+                        var ei = extra_idx;
+                        while (true) {
+                            const edge_offset = extra_off + @as(usize, ei) * 4;
+                            if (edge_offset + 4 > cg.data.len) break;
+                            const edge_val = std.mem.readInt(u32, cg.data[edge_offset..][0..4], .big);
+                            const parent_idx = edge_val & 0x7fffffff;
+                            const parent_oid = cg.getOid(parent_idx);
+                            const ts = self.getCommitTimestampFromGraph(&parent_oid);
+                            self.queue.append(.{ .oid = parent_oid, .timestamp = ts }) catch return null;
+                            if (edge_val & 0x80000000 != 0) break; // last edge
+                            ei += 1;
+                        }
+                    }
+                } else {
+                    const parent_oid = cg.getOid(cdata.parent2);
+                    const ts = self.getCommitTimestampFromGraph(&parent_oid);
+                    self.queue.append(.{ .oid = parent_oid, .timestamp = ts }) catch return null;
+                }
+            }
+        }
+
+        return {};
+    }
+
+    fn getCommitTimestampFromGraph(self: *CommitWalker, oid: *const types.ObjectId) i64 {
+        if (self.repo.commit_graph) |*cg| {
+            if (cg.findCommit(oid)) |idx| {
+                if (cg.getCommitData(idx)) |cdata| {
+                    return @intCast(cdata.timestamp);
+                } else |_| {}
+            }
+        }
+        return self.getCommitTimestamp(oid);
+    }
+
     fn getCommitTimestamp(self: *CommitWalker, oid: *const types.ObjectId) i64 {
+        // Try commit-graph first
+        if (self.repo.commit_graph) |*cg| {
+            if (cg.findCommit(oid)) |idx| {
+                if (cg.getCommitData(idx)) |cdata| {
+                    return @intCast(cdata.timestamp);
+                } else |_| {}
+            }
+        }
+
         var obj = self.repo.readObject(self.allocator, oid) catch return 0;
         defer obj.deinit();
         if (obj.obj_type != .commit) return 0;

@@ -9,11 +9,88 @@ pub const PackEntry = struct {
     path: []const u8,
 };
 
+/// Simple fixed-size LRU object cache keyed by ObjectId.
+pub const ObjectCache = struct {
+    const CACHE_SIZE = 4096;
+
+    const CacheEntry = struct {
+        oid: types.ObjectId,
+        obj_type: types.ObjectType,
+        data: []u8,
+        valid: bool,
+    };
+
+    entries: [CACHE_SIZE]CacheEntry,
+    allocator: std.mem.Allocator,
+
+    pub fn init(allocator: std.mem.Allocator) ObjectCache {
+        var cache: ObjectCache = undefined;
+        cache.allocator = allocator;
+        for (&cache.entries) |*e| {
+            e.valid = false;
+            e.data = &.{};
+            e.oid = types.ObjectId.ZERO;
+            e.obj_type = .blob;
+        }
+        return cache;
+    }
+
+    pub fn deinit(self: *ObjectCache) void {
+        for (&self.entries) |*e| {
+            if (e.valid and e.data.len > 0) {
+                self.allocator.free(e.data);
+            }
+        }
+    }
+
+    fn hashOid(oid: *const types.ObjectId) usize {
+        // Use first 4 bytes of OID as hash, mask to cache size
+        const h = std.mem.readInt(u32, oid.bytes[0..4], .little);
+        return h % CACHE_SIZE;
+    }
+
+    pub fn get(self: *ObjectCache, allocator: std.mem.Allocator, oid: *const types.ObjectId) ?types.Object {
+        const idx = hashOid(oid);
+        const entry = &self.entries[idx];
+        if (entry.valid and entry.oid.eql(oid)) {
+            // Return a copy of the data so the caller owns it
+            const data_copy = allocator.alloc(u8, entry.data.len) catch return null;
+            @memcpy(data_copy, entry.data);
+            return types.Object{
+                .obj_type = entry.obj_type,
+                .data = data_copy,
+                .allocator = allocator,
+            };
+        }
+        return null;
+    }
+
+    pub fn put(self: *ObjectCache, oid: *const types.ObjectId, obj_type: types.ObjectType, data: []const u8) void {
+        const idx = hashOid(oid);
+        const entry = &self.entries[idx];
+
+        // Evict old entry if present
+        if (entry.valid and entry.data.len > 0) {
+            self.allocator.free(entry.data);
+        }
+
+        // Store a copy
+        const data_copy = self.allocator.alloc(u8, data.len) catch return;
+        @memcpy(data_copy, data);
+
+        entry.oid = oid.*;
+        entry.obj_type = obj_type;
+        entry.data = data_copy;
+        entry.valid = true;
+    }
+};
+
 pub const Repository = struct {
     allocator: std.mem.Allocator,
     git_dir: []u8,
     packs: std.array_list.Managed(PackEntry),
     commit_graph: ?commit_graph_mod.CommitGraph,
+    obj_cache: ?*ObjectCache,
 
     pub fn discover(allocator: std.mem.Allocator, start_path: ?[]const u8) !Repository {
         var owned_path: ?[]u8 = null;
@@ -35,11 +112,15 @@ pub const Repository = struct {
                 const git_dir = try allocator.alloc(u8, git_path.len);
                 @memcpy(git_dir, git_path);
 
+                const cache = try allocator.create(ObjectCache);
+                cache.* = ObjectCache.init(allocator);
+
                 var repo = Repository{
                     .allocator = allocator,
                     .git_dir = git_dir,
                     .packs = std.array_list.Managed(PackEntry).init(allocator),
                     .commit_graph = null,
+                    .obj_cache = cache,
                 };
                 errdefer repo.deinit();
 
@@ -60,11 +141,15 @@ pub const Repository = struct {
                     const git_dir = try allocator.alloc(u8, current.len);
                     @memcpy(git_dir, current);
 
+                    const cache2 = try allocator.create(ObjectCache);
+                    cache2.* = ObjectCache.init(allocator);
+
                     var repo = Repository{
                         .allocator = allocator,
                         .git_dir = git_dir,
                         .packs = std.array_list.Managed(PackEntry).init(allocator),
                         .commit_graph = null,
+                        .obj_cache = cache2,
                     };
                     errdefer repo.deinit();
 
@@ -84,6 +169,10 @@ pub const Repository = struct {
     }
 
     pub fn deinit(self: *Repository) void {
+        if (self.obj_cache) |cache| {
+            cache.deinit();
+            self.allocator.destroy(cache);
+        }
         for (self.packs.items) |*entry| {
             entry.pack.close();
             self.allocator.free(entry.path);
@@ -96,15 +185,29 @@ pub const Repository = struct {
     }
 
     pub fn readObject(self: *Repository, allocator: std.mem.Allocator, oid: *const types.ObjectId) !types.Object {
+        // Check cache first
+        if (self.obj_cache) |cache| {
+            if (cache.get(allocator, oid)) |obj| {
+                return obj;
+            }
+        }
+
         // Try loose first
         if (loose.readLooseObject(allocator, self.git_dir, oid)) |obj| {
+            if (self.obj_cache) |cache| {
+                cache.put(oid, obj.obj_type, obj.data);
+            }
             return obj;
         } else |_| {}
 
         // Try pack files
         for (self.packs.items) |*entry| {
             if (entry.pack.findObject(oid)) |offset| {
-                return entry.pack.readObject(allocator, offset);
+                const obj = try entry.pack.readObject(allocator, offset);
+                if (self.obj_cache) |cache| {
+                    cache.put(oid, obj.obj_type, obj.data);
+                }
+                return obj;
             }
         }
 
