@@ -7,6 +7,7 @@ const reflog_mod = @import("reflog.zig");
 const loose = @import("loose.zig");
 const tree_diff = @import("tree_diff.zig");
 const checkout_mod = @import("checkout.zig");
+const config_mod = @import("config.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
@@ -285,14 +286,51 @@ fn createCommitObject(
         try commit_data.append('\n');
     }
 
+    // Read author info from config
+    var name_buf: [256]u8 = undefined;
+    var email_buf: [256]u8 = undefined;
+    var author_name: []const u8 = "zig-git";
+    var author_email: []const u8 = "zig-git@localhost";
+    {
+        var cfg_path_buf: [4096]u8 = undefined;
+        @memcpy(cfg_path_buf[0..repo_git_dir.len], repo_git_dir);
+        const cfg_suffix = "/config";
+        @memcpy(cfg_path_buf[repo_git_dir.len..][0..cfg_suffix.len], cfg_suffix);
+        const cfg_path = cfg_path_buf[0 .. repo_git_dir.len + cfg_suffix.len];
+
+        var cfg = config_mod.Config.loadFile(allocator, cfg_path) catch config_mod.Config.init(allocator);
+        defer cfg.deinit();
+
+        if (cfg.get("user.name")) |n| {
+            if (n.len <= name_buf.len) {
+                @memcpy(name_buf[0..n.len], n);
+                author_name = name_buf[0..n.len];
+            }
+        }
+        if (cfg.get("user.email")) |e| {
+            if (e.len <= email_buf.len) {
+                @memcpy(email_buf[0..e.len], e);
+                author_email = email_buf[0..e.len];
+            }
+        }
+    }
+
     // author and committer
     var ts_buf: [32]u8 = undefined;
     const timestamp = getTimestamp(&ts_buf);
 
-    try commit_data.appendSlice("author zig-git <zig-git@localhost> ");
+    try commit_data.appendSlice("author ");
+    try commit_data.appendSlice(author_name);
+    try commit_data.appendSlice(" <");
+    try commit_data.appendSlice(author_email);
+    try commit_data.appendSlice("> ");
     try commit_data.appendSlice(timestamp);
     try commit_data.appendSlice(" +0000\n");
-    try commit_data.appendSlice("committer zig-git <zig-git@localhost> ");
+    try commit_data.appendSlice("committer ");
+    try commit_data.appendSlice(author_name);
+    try commit_data.appendSlice(" <");
+    try commit_data.appendSlice(author_email);
+    try commit_data.appendSlice("> ");
     try commit_data.appendSlice(timestamp);
     try commit_data.appendSlice(" +0000\n");
     try commit_data.append('\n');

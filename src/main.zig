@@ -1051,12 +1051,17 @@ fn runLogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var use_advanced_format = false;
 
     for (args) |arg| {
-        if (std.mem.startsWith(u8, arg, "-n") or std.mem.startsWith(u8, arg, "--max-count=")) {
+        if (std.mem.eql(u8, arg, "-p") or std.mem.eql(u8, arg, "--patch")) {
+            opts.patch = true;
+        } else if (std.mem.startsWith(u8, arg, "-n") or std.mem.startsWith(u8, arg, "--max-count=")) {
             const val = if (std.mem.startsWith(u8, arg, "-n"))
                 arg[2..]
             else
                 arg["--max-count=".len..];
             opts.max_count = std.fmt.parseInt(usize, val, 10) catch 0;
+        } else if (arg.len >= 2 and arg[0] == '-' and arg[1] >= '0' and arg[1] <= '9') {
+            // Handle -N shorthand (e.g. -2 means --max-count=2)
+            opts.max_count = std.fmt.parseInt(usize, arg[1..], 10) catch 0;
         } else if (std.mem.eql(u8, arg, "--oneline")) {
             opts.format = .oneline;
         } else if (std.mem.eql(u8, arg, "--graph")) {

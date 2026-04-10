@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const repository = @import("repository.zig");
 const tree_diff = @import("tree_diff.zig");
+const diff_mod = @import("diff.zig");
 const ref_mod = @import("ref.zig");
 
 /// Format for log output.
@@ -28,6 +29,8 @@ pub const LogOptions = struct {
     decorate: bool = true,
     /// Follow only first parent (useful for mainline history)
     first_parent: bool = false,
+    /// Show patch (diff) for each commit
+    patch: bool = false,
 };
 
 /// Parsed commit information.
@@ -111,6 +114,11 @@ pub fn runLog(
         switch (opts.format) {
             .full => try writeFullFormat(stdout, &commit, opts.graph, count, deco_str, is_merge, prev_was_merge, prev_at_merge_second),
             .oneline => try writeOnelineFormat(stdout, &commit, opts.graph, deco_str, is_merge, prev_was_merge, prev_at_merge_second),
+        }
+
+        // Show patch if requested
+        if (opts.patch) {
+            try writeCommitDiff(repo, allocator, &commit, stdout);
         }
 
         prev_at_merge_second = prev_was_merge;
@@ -647,6 +655,34 @@ fn formatTimestamp(timestamp: i64, timezone: []const u8) [64]u8 {
     }) catch {};
 
     return result;
+}
+
+/// Write the diff for a single commit (against its first parent, or empty tree for root commits).
+fn writeCommitDiff(
+    repo: *repository.Repository,
+    allocator: std.mem.Allocator,
+    commit: *CommitInfo,
+    stdout: std.fs.File,
+) !void {
+    const new_tree_oid = commit.tree_oid;
+
+    if (commit.parents.items.len == 0) {
+        // Root commit - diff against empty tree
+        var diff_result = tree_diff.diffTrees(repo, allocator, null, &new_tree_oid) catch return;
+        defer diff_result.deinit();
+        diff_mod.writeTreeDiff(repo, allocator, diff_result.changes.items, stdout) catch return;
+    } else {
+        // Diff against first parent
+        const parent_oid = commit.parents.items[0];
+        var parent_obj = repo.readObject(allocator, &parent_oid) catch return;
+        defer parent_obj.deinit();
+        if (parent_obj.obj_type != .commit) return;
+        const parent_tree_oid = tree_diff.getCommitTreeOid(parent_obj.data) catch return;
+
+        var diff_result = tree_diff.diffTrees(repo, allocator, &parent_tree_oid, &new_tree_oid) catch return;
+        defer diff_result.deinit();
+        diff_mod.writeTreeDiff(repo, allocator, diff_result.changes.items, stdout) catch return;
+    }
 }
 
 test "getFirstLine" {

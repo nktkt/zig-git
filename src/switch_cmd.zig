@@ -7,6 +7,7 @@ const reflog_mod = @import("reflog.zig");
 const checkout_mod = @import("checkout.zig");
 const tree_diff = @import("tree_diff.zig");
 const loose = @import("loose.zig");
+const hash_mod = @import("hash.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
@@ -315,7 +316,9 @@ fn hasUncommittedChanges(
 
     const work_dir = getWorkDir(repo.git_dir);
 
-    // Check if any tracked file is modified
+    // Check if any tracked file is modified by comparing content hashes.
+    // We cannot rely on file_size from the index because it may be stale
+    // (e.g., set to 0 after operations that rebuild the index from a tree).
     for (idx.entries.items) |*entry| {
         var file_path_buf: [4096]u8 = undefined;
         var fp_stream = std.io.fixedBufferStream(&file_path_buf);
@@ -328,10 +331,39 @@ fn hasUncommittedChanges(
         const file = std.fs.openFileAbsolute(file_path, .{}) catch continue;
         defer file.close();
         const stat = file.stat() catch continue;
-        if (stat.size != entry.file_size) return true;
+
+        // Quick check: if file_size is non-zero in index and matches, we can
+        // still compare content to be sure. But the key fix is: when file_size
+        // in the index is 0, we MUST hash compare instead of treating it as modified.
+
+        // Read file content and compute blob OID
+        const content = allocator.alloc(u8, @intCast(stat.size)) catch continue;
+        defer allocator.free(content);
+        const n = file.readAll(content) catch continue;
+        const data = content[0..n];
+
+        // Compute blob OID: SHA-1("blob <size>\0<data>")
+        const wt_oid = computeBlobOid(data);
+        if (!wt_oid.eql(&entry.oid)) return true;
     }
 
     return false;
+}
+
+/// Compute the SHA-1 OID of blob content.
+fn computeBlobOid(data: []const u8) types.ObjectId {
+    var header_buf: [64]u8 = undefined;
+    var hstream = std.io.fixedBufferStream(&header_buf);
+    const hwriter = hstream.writer();
+    hwriter.writeAll("blob ") catch return types.ObjectId.ZERO;
+    hwriter.print("{d}", .{data.len}) catch return types.ObjectId.ZERO;
+    hwriter.writeByte(0) catch return types.ObjectId.ZERO;
+    const header = header_buf[0..hstream.pos];
+
+    var hasher = hash_mod.Sha1.init(.{});
+    hasher.update(header);
+    hasher.update(data);
+    return types.ObjectId{ .bytes = hasher.finalResult() };
 }
 
 fn isBranch(allocator: std.mem.Allocator, git_dir: []const u8, name: []const u8) bool {
