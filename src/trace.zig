@@ -254,7 +254,7 @@ fn writeTimestamp(writer: anytype) void {
 fn getTimestamp() u64 {
     if (@hasDecl(std.posix, "clock_gettime")) {
         var ts: std.posix.timespec = undefined;
-        std.posix.clock_gettime(.REALTIME) catch return 0;
+        _ = std.posix.clock_gettime(.REALTIME) catch return 0;
         _ = &ts;
     }
     // Fallback: use nanoTimestamp

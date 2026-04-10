@@ -8,6 +8,7 @@ const reflog_mod = @import("reflog.zig");
 const repository = @import("repository.zig");
 const config_mod = @import("config.zig");
 const hash_mod = @import("hash.zig");
+const editor_mod = @import("editor.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
@@ -18,6 +19,8 @@ pub const CommitOptions = struct {
     all: bool = false, // -a: auto-stage tracked modified files
     amend: bool = false, // --amend
     allow_empty: bool = false, // --allow-empty
+    message_file: ?[]const u8 = null, // -F <file>: read message from file
+    no_edit: bool = false, // --no-edit: don't open editor (for amend)
 };
 
 /// Run the "commit" command.
@@ -56,6 +59,15 @@ pub fn runCommit(
         } else if (std.mem.startsWith(u8, arg, "-m")) {
             // -m"message" (no space)
             opts.message = arg[2..];
+        } else if (std.mem.eql(u8, arg, "-F") or std.mem.eql(u8, arg, "--file")) {
+            i += 1;
+            if (i >= args.len) {
+                try stderr_file.writeAll("error: switch 'F' requires a value\n");
+                std.process.exit(1);
+            }
+            opts.message_file = args[i];
+        } else if (std.mem.eql(u8, arg, "--no-edit")) {
+            opts.no_edit = true;
         } else if (std.mem.startsWith(u8, arg, "-")) {
             var buf: [256]u8 = undefined;
             const msg = std.fmt.bufPrint(&buf, "error: unknown option '{s}'\n", .{arg}) catch "error: unknown option\n";
@@ -64,11 +76,50 @@ pub fn runCommit(
         }
     }
 
-    // Validate: need a message (unless --amend which can reuse).
-    if (opts.message == null and !opts.amend) {
-        try stderr_file.writeAll("error: must supply a commit message with -m\n");
-        std.process.exit(1);
+    // Handle -F: read message from file
+    var file_message: ?[]u8 = null;
+    defer if (file_message) |fm| allocator.free(fm);
+
+    if (opts.message_file) |msg_file| {
+        if (std.mem.eql(u8, msg_file, "-")) {
+            // Read from stdin
+            const stdin_file = std.fs.File{ .handle = std.posix.STDIN_FILENO };
+            var content = std.array_list.Managed(u8).init(allocator);
+            defer content.deinit();
+            var read_buf: [4096]u8 = undefined;
+            while (true) {
+                const n = stdin_file.read(&read_buf) catch break;
+                if (n == 0) break;
+                try content.appendSlice(read_buf[0..n]);
+            }
+            file_message = try content.toOwnedSlice();
+        } else {
+            const f = std.fs.cwd().openFile(msg_file, .{}) catch {
+                var buf: [256]u8 = undefined;
+                const msg = std.fmt.bufPrint(&buf, "fatal: could not open '{s}'\n", .{msg_file}) catch
+                    "fatal: could not open message file\n";
+                try stderr_file.writeAll(msg);
+                std.process.exit(128);
+            };
+            defer f.close();
+            const stat = try f.stat();
+            if (stat.size > 1024 * 1024) {
+                try stderr_file.writeAll("fatal: message file too large\n");
+                std.process.exit(128);
+            }
+            file_message = try allocator.alloc(u8, @intCast(stat.size));
+            const n = try f.readAll(file_message.?);
+            if (n < file_message.?.len) {
+                const trimmed = try allocator.alloc(u8, n);
+                @memcpy(trimmed, file_message.?[0..n]);
+                allocator.free(file_message.?);
+                file_message = trimmed;
+            }
+        }
+        opts.message = file_message;
     }
+
+    // Note: if no message and not amend, we'll try the editor later (after we know the branch)
 
     // Get working directory.
     const work_dir = getWorkDir(repo.git_dir);
@@ -119,10 +170,16 @@ pub fn runCommit(
             const amended_parent = parseCommitParent(commit_obj.data);
             parent_oid = amended_parent;
 
-            // If no -m was given, reuse the commit message.
+            // If no -m was given and --no-edit, reuse the commit message.
             if (opts.message == null) {
-                amend_message = try parseCommitMessage(allocator, commit_obj.data);
-                opts.message = amend_message.?;
+                if (opts.no_edit) {
+                    amend_message = try parseCommitMessage(allocator, commit_obj.data);
+                    opts.message = amend_message.?;
+                } else {
+                    // Reuse old message as default
+                    amend_message = try parseCommitMessage(allocator, commit_obj.data);
+                    opts.message = amend_message.?;
+                }
             }
         } else {
             try stderr_file.writeAll("fatal: cannot amend: no commits yet\n");
@@ -144,6 +201,43 @@ pub fn runCommit(
                 }
             }
         }
+    }
+
+    // If no message was provided, launch the editor
+    var editor_message: ?[]u8 = null;
+    defer if (editor_message) |em| allocator.free(em);
+
+    if (opts.message == null) {
+        // Get branch name for the template
+        const branch_short = getBranchShortName(head_ref_name);
+
+        // Collect changed file names from index
+        var changed_files_list = std.array_list.Managed([]const u8).init(allocator);
+        defer changed_files_list.deinit();
+        for (idx.entries.items) |*entry| {
+            try changed_files_list.append(entry.name);
+        }
+
+        editor_message = editor_mod.editCommitMessage(
+            allocator,
+            repo.git_dir,
+            null,
+            branch_short,
+            if (changed_files_list.items.len > 0) changed_files_list.items else null,
+        ) catch |err| {
+            switch (err) {
+                error.CommitAborted => {
+                    std.process.exit(1);
+                },
+                error.FileNotFound => {
+                    // Editor not found; fall back to requiring -m
+                    try stderr_file.writeAll("error: terminal not available. Use -m to provide a commit message.\n");
+                    std.process.exit(1);
+                },
+                else => return err,
+            }
+        };
+        opts.message = editor_message;
     }
 
     // Get author/committer info.

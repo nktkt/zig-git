@@ -178,9 +178,9 @@ fn spawnSsh(
     const ssh_args = try buildSshArgs(&components, service, &host_buf, &cmd_buf, &port_buf);
 
     var child = std.process.Child.init(ssh_args.slice(), allocator);
-    child.stdin_behavior = .pipe;
-    child.stdout_behavior = .pipe;
-    child.stderr_behavior = .pipe;
+    child.stdin_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
 
     try child.spawn();
     return child;

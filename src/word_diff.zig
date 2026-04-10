@@ -181,17 +181,23 @@ fn diffTokens(
     for (edit_ops) |op| {
         switch (op) {
             .equal => {
-                try result.changes.append(.{ .kind = .equal, .text = old_tokens[oi].text });
-                oi += 1;
-                ni += 1;
+                if (oi < old_tokens.len and ni < new_tokens.len) {
+                    try result.changes.append(.{ .kind = .equal, .text = old_tokens[oi].text });
+                    oi += 1;
+                    ni += 1;
+                }
             },
             .delete => {
-                try result.changes.append(.{ .kind = .removed, .text = old_tokens[oi].text });
-                oi += 1;
+                if (oi < old_tokens.len) {
+                    try result.changes.append(.{ .kind = .removed, .text = old_tokens[oi].text });
+                    oi += 1;
+                }
             },
             .insert => {
-                try result.changes.append(.{ .kind = .added, .text = new_tokens[ni].text });
-                ni += 1;
+                if (ni < new_tokens.len) {
+                    try result.changes.append(.{ .kind = .added, .text = new_tokens[ni].text });
+                    ni += 1;
+                }
             },
         }
     }

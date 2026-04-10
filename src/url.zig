@@ -214,7 +214,7 @@ pub fn parse(url_string: []const u8) ParseError!GitUrl {
 /// Check if a URL string looks like an SCP-style git URL.
 /// SCP-style: [user@]host:path where the colon is followed by a non-digit
 /// (to distinguish from host:port in scheme:// URLs).
-fn isSCPStyle(s: []const u8) bool {
+pub fn isSCPStyle(s: []const u8) bool {
     // Must contain a colon
     const colon_pos = std.mem.indexOfScalar(u8, s, ':') orelse return false;
 

@@ -6,15 +6,179 @@ const config_mod = @import("config.zig");
 const remote_mod = @import("remote.zig");
 const ref_mod = @import("ref.zig");
 const loose = @import("loose.zig");
+const url_mod = @import("url.zig");
+const smart_http = @import("smart_http.zig");
+const smart_ssh = @import("smart_ssh.zig");
+const pack_index_writer = @import("pack_index_writer.zig");
+const hash_mod = @import("hash.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
-/// Clone a local repository.
+/// Clone a repository (local, HTTP/HTTPS, or SSH).
 pub fn cloneRepository(allocator: std.mem.Allocator, source_url: []const u8, target_dir: ?[]const u8) !void {
+    // Detect the URL type
+    const parsed = url_mod.parse(source_url) catch {
+        try stderr_file.writeAll("fatal: unable to parse URL\n");
+        return error.InvalidUrl;
+    };
+
+    if (parsed.isLocal()) {
+        return cloneLocal(allocator, source_url, target_dir);
+    }
+
+    if (parsed.isHttp()) {
+        return cloneHttp(allocator, source_url, target_dir);
+    }
+
+    if (parsed.isSsh()) {
+        return cloneSsh(allocator, source_url, target_dir);
+    }
+
+    try stderr_file.writeAll("fatal: unsupported protocol\n");
+    return error.UnsupportedProtocol;
+}
+
+// -----------------------------------------------------------------------
+// HTTP(S) Clone
+// -----------------------------------------------------------------------
+
+fn cloneHttp(allocator: std.mem.Allocator, source_url: []const u8, target_dir: ?[]const u8) !void {
+    // Determine target directory name
+    const target_name = targetDirName(source_url, target_dir);
+
+    printCloning(target_name);
+
+    // Step 1: Discover refs
+    var discovery = try smart_http.discoverRefsHttp(allocator, source_url, "git-upload-pack");
+    defer discovery.deinit();
+
+    if (discovery.refs.len == 0) {
+        try stderr_file.writeAll("warning: remote has no refs, cloning empty repository\n");
+        // Just init an empty repo
+        const git_dir = try init_mod.initRepository(allocator, .{ .directory = target_name });
+        defer allocator.free(git_dir);
+        try remote_mod.addRemote(allocator, git_dir, "origin", source_url);
+        return;
+    }
+
+    // Step 2: Determine what we want
+    var wants = std.array_list.Managed(types.ObjectId).init(allocator);
+    defer wants.deinit();
+
+    // Collect unique OIDs to fetch
+    var seen = std.AutoHashMap([types.OID_RAW_LEN]u8, void).init(allocator);
+    defer seen.deinit();
+
+    for (discovery.refs) |ref| {
+        if (!seen.contains(ref.oid.bytes)) {
+            try seen.put(ref.oid.bytes, {});
+            try wants.append(ref.oid);
+        }
+    }
+
+    // Step 3: Fetch the pack data
+    const empty_haves: []const types.ObjectId = &.{};
+    const pack_data = try smart_http.fetchPackHttp(
+        allocator,
+        source_url,
+        wants.items,
+        empty_haves,
+        discovery.capabilities_str,
+    );
+    defer allocator.free(pack_data);
+
+    // Step 4: Initialize the target repository
+    const git_dir = try init_mod.initRepository(allocator, .{ .directory = target_name });
+    defer allocator.free(git_dir);
+
+    // Set up remote "origin"
+    try remote_mod.addRemote(allocator, git_dir, "origin", source_url);
+
+    // Step 5: Write pack file and index it
+    try installPackData(allocator, git_dir, pack_data);
+
+    // Step 6: Set up refs from discovery
+    try setupRefsFromDiscovery(allocator, git_dir, &discovery, "origin");
+
+    // Step 7: Checkout HEAD
+    try checkoutHead(allocator, git_dir);
+
+    try stderr_file.writeAll("done.\n");
+}
+
+// -----------------------------------------------------------------------
+// SSH Clone
+// -----------------------------------------------------------------------
+
+fn cloneSsh(allocator: std.mem.Allocator, source_url: []const u8, target_dir: ?[]const u8) !void {
+    const target_name = targetDirName(source_url, target_dir);
+
+    printCloning(target_name);
+
+    // Step 1: Discover refs
+    var discovery = try smart_ssh.discoverRefsSsh(allocator, source_url, "git-upload-pack");
+    defer discovery.deinit();
+
+    if (discovery.refs.len == 0) {
+        try stderr_file.writeAll("warning: remote has no refs, cloning empty repository\n");
+        const git_dir = try init_mod.initRepository(allocator, .{ .directory = target_name });
+        defer allocator.free(git_dir);
+        try remote_mod.addRemote(allocator, git_dir, "origin", source_url);
+        return;
+    }
+
+    // Step 2: Determine wants
+    var wants = std.array_list.Managed(types.ObjectId).init(allocator);
+    defer wants.deinit();
+
+    var seen = std.AutoHashMap([types.OID_RAW_LEN]u8, void).init(allocator);
+    defer seen.deinit();
+
+    for (discovery.refs) |ref| {
+        if (!seen.contains(ref.oid.bytes)) {
+            try seen.put(ref.oid.bytes, {});
+            try wants.append(ref.oid);
+        }
+    }
+
+    // Step 3: Fetch pack
+    const empty_haves: []const types.ObjectId = &.{};
+    const pack_data = try smart_ssh.fetchPackSsh(
+        allocator,
+        source_url,
+        wants.items,
+        empty_haves,
+        discovery.capabilities_str,
+    );
+    defer allocator.free(pack_data);
+
+    // Step 4: Init repo
+    const git_dir = try init_mod.initRepository(allocator, .{ .directory = target_name });
+    defer allocator.free(git_dir);
+
+    try remote_mod.addRemote(allocator, git_dir, "origin", source_url);
+
+    // Step 5: Write pack
+    try installPackData(allocator, git_dir, pack_data);
+
+    // Step 6: Set up refs
+    try setupRefsFromDiscovery(allocator, git_dir, &discovery, "origin");
+
+    // Step 7: Checkout
+    try checkoutHead(allocator, git_dir);
+
+    try stderr_file.writeAll("done.\n");
+}
+
+// -----------------------------------------------------------------------
+// Local Clone (original implementation)
+// -----------------------------------------------------------------------
+
+fn cloneLocal(allocator: std.mem.Allocator, source_url: []const u8, target_dir: ?[]const u8) !void {
     // Resolve source path
     const source_path = remote_mod.resolveLocalUrl(source_url) orelse {
-        try stderr_file.writeAll("fatal: only local repositories are supported for clone\n");
+        try stderr_file.writeAll("fatal: not a local path\n");
         return error.UnsupportedProtocol;
     };
 
@@ -26,13 +190,7 @@ pub fn cloneRepository(allocator: std.mem.Allocator, source_url: []const u8, tar
     var target_name_buf: [1024]u8 = undefined;
     const target_name: []const u8 = if (target_dir) |d| d else deriveRepoName(abs_source, &target_name_buf);
 
-    // Print cloning message
-    {
-        var msg_buf: [512]u8 = undefined;
-        const msg = std.fmt.bufPrint(&msg_buf, "Cloning into '{s}'...\n", .{target_name}) catch
-            "Cloning...\n";
-        try stderr_file.writeAll(msg);
-    }
+    printCloning(target_name);
 
     // Verify source is a git repository
     var source_git_dir_buf: [4096]u8 = undefined;
@@ -62,6 +220,189 @@ pub fn cloneRepository(allocator: std.mem.Allocator, source_url: []const u8, tar
 
     // Checkout the default branch
     try checkoutHead(allocator, git_dir);
+}
+
+// -----------------------------------------------------------------------
+// Shared helpers for network clones
+// -----------------------------------------------------------------------
+
+/// Install pack data into the repository.
+/// Writes the .pack file, then indexes it (preferring `git index-pack`, falling back to our own).
+fn installPackData(allocator: std.mem.Allocator, git_dir: []const u8, pack_data: []const u8) !void {
+    if (pack_data.len < 12) return error.InvalidPackData;
+
+    // Verify PACK header
+    if (!std.mem.eql(u8, pack_data[0..4], "PACK")) return error.InvalidPackData;
+
+    // Compute the pack file SHA-1 (everything except the last 20 bytes, which is the trailer checksum)
+    // Actually, we need the SHA-1 of the content to name the file.
+    // The pack file's own checksum is the last 20 bytes.
+    var pack_hash: [20]u8 = undefined;
+    if (pack_data.len >= 20) {
+        // Use the pack's trailing checksum as the hash for naming
+        @memcpy(&pack_hash, pack_data[pack_data.len - 20 ..][0..20]);
+    } else {
+        // Compute from content
+        var hasher = hash_mod.Sha1.init(.{});
+        hasher.update(pack_data);
+        pack_hash = hasher.finalResult();
+    }
+
+    // Build the pack file name: pack-<hex>.pack
+    var hex_buf: [40]u8 = undefined;
+    hash_mod.bytesToHex(&pack_hash, &hex_buf);
+
+    // Ensure objects/pack directory exists
+    var pack_dir_buf: [4096]u8 = undefined;
+    var pdpos: usize = 0;
+    @memcpy(pack_dir_buf[pdpos..][0..git_dir.len], git_dir);
+    pdpos += git_dir.len;
+    const pack_dir_suffix = "/objects/pack";
+    @memcpy(pack_dir_buf[pdpos..][0..pack_dir_suffix.len], pack_dir_suffix);
+    pdpos += pack_dir_suffix.len;
+    const pack_dir = pack_dir_buf[0..pdpos];
+
+    std.fs.makeDirAbsolute(pack_dir) catch |err| switch (err) {
+        error.PathAlreadyExists => {},
+        else => return err,
+    };
+
+    // Build full paths
+    var pack_path_buf: [4096]u8 = undefined;
+    var pppos: usize = 0;
+    @memcpy(pack_path_buf[pppos..][0..pack_dir.len], pack_dir);
+    pppos += pack_dir.len;
+    @memcpy(pack_path_buf[pppos..][0.."/pack-".len], "/pack-");
+    pppos += "/pack-".len;
+    @memcpy(pack_path_buf[pppos..][0..40], &hex_buf);
+    pppos += 40;
+    @memcpy(pack_path_buf[pppos..][0..".pack".len], ".pack");
+    pppos += ".pack".len;
+    const pack_path = pack_path_buf[0..pppos];
+
+    // Write pack file
+    const pack_file = try std.fs.createFileAbsolute(pack_path, .{});
+    defer pack_file.close();
+    try pack_file.writeAll(pack_data);
+
+    // Index the pack file
+    // Try git index-pack first (most reliable)
+    pack_index_writer.indexPackFileWithGit(allocator, pack_path) catch {
+        // Fall back to our own indexer
+        var idx_path_buf: [4096]u8 = undefined;
+        var ippos: usize = 0;
+        @memcpy(idx_path_buf[ippos..][0..pack_dir.len], pack_dir);
+        ippos += pack_dir.len;
+        @memcpy(idx_path_buf[ippos..][0.."/pack-".len], "/pack-");
+        ippos += "/pack-".len;
+        @memcpy(idx_path_buf[ippos..][0..40], &hex_buf);
+        ippos += 40;
+        @memcpy(idx_path_buf[ippos..][0..".idx".len], ".idx");
+        ippos += ".idx".len;
+        const idx_path = idx_path_buf[0..ippos];
+
+        pack_index_writer.indexPackFile(allocator, pack_path, idx_path) catch |idx_err| {
+            var buf: [256]u8 = undefined;
+            const msg = std.fmt.bufPrint(&buf, "warning: failed to index pack: {s}\n", .{@errorName(idx_err)}) catch
+                "warning: failed to index pack\n";
+            stderr_file.writeAll(msg) catch {};
+        };
+    };
+}
+
+/// Set up refs from the discovery result after a network clone.
+fn setupRefsFromDiscovery(
+    allocator: std.mem.Allocator,
+    git_dir: []const u8,
+    discovery: *smart_http.DiscoverResult,
+    remote_name: []const u8,
+) !void {
+    var head_oid: ?types.ObjectId = null;
+    const head_symref_target: ?[]const u8 = discovery.head_symref;
+
+    for (discovery.refs) |ref| {
+        if (std.mem.eql(u8, ref.name, "HEAD")) {
+            head_oid = ref.oid;
+            continue;
+        }
+
+        if (std.mem.startsWith(u8, ref.name, "refs/heads/")) {
+            const branch_name = ref.name["refs/heads/".len..];
+
+            // Create remote tracking ref: refs/remotes/<remote>/<branch>
+            var tracking_buf: [512]u8 = undefined;
+            var pos: usize = 0;
+            const prefix = "refs/remotes/";
+            @memcpy(tracking_buf[pos..][0..prefix.len], prefix);
+            pos += prefix.len;
+            @memcpy(tracking_buf[pos..][0..remote_name.len], remote_name);
+            pos += remote_name.len;
+            tracking_buf[pos] = '/';
+            pos += 1;
+            @memcpy(tracking_buf[pos..][0..branch_name.len], branch_name);
+            pos += branch_name.len;
+            const tracking_ref = tracking_buf[0..pos];
+
+            ref_mod.createRef(allocator, git_dir, tracking_ref, ref.oid, null) catch continue;
+        }
+
+        if (std.mem.startsWith(u8, ref.name, "refs/tags/")) {
+            ref_mod.createRef(allocator, git_dir, ref.name, ref.oid, null) catch continue;
+        }
+    }
+
+    // Set up HEAD
+    if (head_symref_target) |symref| {
+        // HEAD points to a branch, e.g. refs/heads/master
+        try ref_mod.updateSymRef(git_dir, "HEAD", symref);
+
+        // Also create the local branch pointing to HEAD's commit
+        if (head_oid) |oid| {
+            ref_mod.createRef(allocator, git_dir, symref, oid, null) catch {};
+        } else {
+            // Find the OID from the symref target in the discovery refs
+            for (discovery.refs) |ref| {
+                if (std.mem.eql(u8, ref.name, symref)) {
+                    ref_mod.createRef(allocator, git_dir, symref, ref.oid, null) catch {};
+                    break;
+                }
+            }
+        }
+    } else if (head_oid) |oid| {
+        // Detached HEAD or couldn't determine symref
+        // Try to find which branch HEAD points to
+        var found_branch: ?[]const u8 = null;
+        for (discovery.refs) |ref| {
+            if (std.mem.startsWith(u8, ref.name, "refs/heads/") and ref.oid.eql(&oid)) {
+                found_branch = ref.name;
+                break;
+            }
+        }
+
+        if (found_branch) |branch| {
+            try ref_mod.updateSymRef(git_dir, "HEAD", branch);
+            ref_mod.createRef(allocator, git_dir, branch, oid, null) catch {};
+        } else {
+            // Default to refs/heads/master or refs/heads/main
+            const default_branch = "refs/heads/master";
+            try ref_mod.updateSymRef(git_dir, "HEAD", default_branch);
+            ref_mod.createRef(allocator, git_dir, default_branch, oid, null) catch {};
+        }
+    }
+}
+
+/// Determine the target directory name.
+fn targetDirName(source_url: []const u8, target_dir: ?[]const u8) []const u8 {
+    if (target_dir) |d| return d;
+    return url_mod.repoName(source_url);
+}
+
+/// Print the "Cloning into ..." message.
+fn printCloning(target_name: []const u8) void {
+    var msg_buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, "Cloning into '{s}'...\n", .{target_name}) catch
+        "Cloning...\n";
+    stderr_file.writeAll(msg) catch {};
 }
 
 /// Run the clone command from CLI args.
@@ -100,7 +441,9 @@ pub fn runClone(allocator: std.mem.Allocator, args: []const []const u8) !void {
     };
 }
 
-// --- Internal helpers ---
+// -----------------------------------------------------------------------
+// Local clone helpers (kept from original)
+// -----------------------------------------------------------------------
 
 /// Resolve a possibly-relative path to an absolute path.
 fn resolveAbsolutePath(allocator: std.mem.Allocator, path: []const u8, buf: []u8) ![]const u8 {
@@ -413,8 +756,8 @@ fn checkoutTree(allocator: std.mem.Allocator, repo: *repository.Repository, tree
 
             // Set executable bit if mode is 100755
             if (std.mem.eql(u8, mode_str, "100755")) {
-                const stat = file.stat() catch continue;
-                const new_mode = stat.mode | 0o111;
+                const file_stat = file.stat() catch continue;
+                const new_mode = file_stat.mode | 0o111;
                 file.chmod(new_mode) catch {};
             }
         }

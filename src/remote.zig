@@ -1,5 +1,6 @@
 const std = @import("std");
 const config_mod = @import("config.zig");
+const url_mod = @import("url.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
@@ -312,11 +313,16 @@ pub fn resolveLocalUrl(url: []const u8) ?[]const u8 {
     if (url.len > 0 and url[0] == '/') {
         return url;
     }
-    // Relative path (contains no "://" scheme)
-    if (std.mem.indexOf(u8, url, "://") == null) {
-        return url;
+    // Check for scheme://
+    if (std.mem.indexOf(u8, url, "://") != null) {
+        return null;
     }
-    return null;
+    // Check for SCP-style git@host:path (not a local path)
+    if (url_mod.isSCPStyle(url)) {
+        return null;
+    }
+    // Relative path
+    return url;
 }
 
 // --- Helpers ---

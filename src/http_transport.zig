@@ -116,9 +116,9 @@ fn curlRequest(
 
     // Spawn curl process
     var child = std.process.Child.init(argv_list.items, allocator);
-    child.stdin_behavior = if (body != null) .pipe else .inherit;
-    child.stdout_behavior = .pipe;
-    child.stderr_behavior = .pipe;
+    child.stdin_behavior = if (body != null) .Pipe else .Inherit;
+    child.stdout_behavior = .Pipe;
+    child.stderr_behavior = .Pipe;
 
     try child.spawn();
 
@@ -138,7 +138,7 @@ fn curlRequest(
 
     const term = try child.wait();
     const exit_code = switch (term) {
-        .exited => |code| code,
+        .Exited => |code| code,
         else => 1,
     };
 

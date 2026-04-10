@@ -2,6 +2,7 @@ const std = @import("std");
 const types = @import("types.zig");
 const repository = @import("repository.zig");
 const tree_diff = @import("tree_diff.zig");
+const ref_mod = @import("ref.zig");
 
 /// Format for log output.
 pub const LogFormat = enum {
@@ -21,6 +22,12 @@ pub const LogOptions = struct {
     graph: bool = false,
     /// Starting ref (default: HEAD)
     start_ref: []const u8 = "HEAD",
+    /// Walk commits from ALL refs (branches + tags)
+    all: bool = false,
+    /// Show branch/tag decorations
+    decorate: bool = true,
+    /// Follow only first parent (useful for mainline history)
+    first_parent: bool = false,
 };
 
 /// Parsed commit information.
@@ -60,21 +67,37 @@ pub fn runLog(
     opts: LogOptions,
     stdout: std.fs.File,
 ) !void {
-    // Resolve starting commit
-    const start_oid = repo.resolveRef(allocator, opts.start_ref) catch |err| {
-        switch (err) {
-            error.ObjectNotFound => return, // Empty repo, no commits
-            else => return err,
-        }
-    };
+    // Build decoration map for --decorate
+    var deco_map: ?DecoMap = null;
+    defer if (deco_map) |*dm| dm.deinit();
+
+    if (opts.decorate) {
+        deco_map = buildDecoMap(allocator, repo) catch null;
+    }
 
     // Walk commit history
     var walker = CommitWalker.init(allocator, repo);
     defer walker.deinit();
+    walker.first_parent = opts.first_parent;
 
-    try walker.push(start_oid);
+    if (opts.all) {
+        // Push all refs (branches + tags)
+        pushAllRefs(allocator, repo, &walker) catch {};
+    } else {
+        // Resolve starting commit
+        const start_oid = repo.resolveRef(allocator, opts.start_ref) catch |err| {
+            switch (err) {
+                error.ObjectNotFound => return, // Empty repo, no commits
+                else => return err,
+            }
+        };
+        try walker.push(start_oid);
+    }
 
+    // For graph mode with merge commits, track parent info
     var count: usize = 0;
+    var prev_was_merge = false;
+    var prev_at_merge_second = false;
 
     while (try walker.next()) |oid| {
         if (opts.max_count > 0 and count >= opts.max_count) break;
@@ -82,13 +105,118 @@ pub fn runLog(
         var commit = parseCommit(allocator, repo, &oid) catch continue;
         defer commit.deinit();
 
+        const deco_str = if (deco_map) |*dm| dm.getDecoString(&oid) else null;
+        const is_merge = commit.parents.items.len > 1;
+
         switch (opts.format) {
-            .full => try writeFullFormat(stdout, &commit, opts.graph, count),
-            .oneline => try writeOnelineFormat(stdout, &commit, opts.graph),
+            .full => try writeFullFormat(stdout, &commit, opts.graph, count, deco_str, is_merge, prev_was_merge, prev_at_merge_second),
+            .oneline => try writeOnelineFormat(stdout, &commit, opts.graph, deco_str, is_merge, prev_was_merge, prev_at_merge_second),
         }
 
+        prev_at_merge_second = prev_was_merge;
+        prev_was_merge = is_merge;
         count += 1;
     }
+}
+
+/// Push all branch and tag refs into the walker.
+fn pushAllRefs(
+    allocator: std.mem.Allocator,
+    repo: *repository.Repository,
+    walker: *CommitWalker,
+) !void {
+    // Branches
+    const branches = ref_mod.listRefs(allocator, repo.git_dir, "refs/heads/") catch &[_]ref_mod.RefEntry{};
+    defer ref_mod.freeRefEntries(allocator, @constCast(branches));
+
+    for (branches) |entry| {
+        try walker.push(entry.oid);
+    }
+
+    // Tags
+    const tags = ref_mod.listRefs(allocator, repo.git_dir, "refs/tags/") catch &[_]ref_mod.RefEntry{};
+    defer ref_mod.freeRefEntries(allocator, @constCast(tags));
+
+    for (tags) |entry| {
+        try walker.push(entry.oid);
+    }
+}
+
+/// Decoration map for showing branch/tag names next to commits.
+const DecoMap = struct {
+    allocator: std.mem.Allocator,
+    entries: std.array_list.Managed(DecoEntry),
+
+    const DecoEntry = struct {
+        oid_hex: [types.OID_HEX_LEN]u8,
+        name: []u8,
+    };
+
+    fn init(alloc: std.mem.Allocator) DecoMap {
+        return .{
+            .allocator = alloc,
+            .entries = std.array_list.Managed(DecoEntry).init(alloc),
+        };
+    }
+
+    fn deinit(self: *DecoMap) void {
+        for (self.entries.items) |*e| {
+            self.allocator.free(e.name);
+        }
+        self.entries.deinit();
+    }
+
+    fn addEntry(self: *DecoMap, oid: *const types.ObjectId, name: []const u8) !void {
+        const owned = try self.allocator.alloc(u8, name.len);
+        @memcpy(owned, name);
+        try self.entries.append(.{ .oid_hex = oid.toHex(), .name = owned });
+    }
+
+    fn getDecoString(self: *DecoMap, oid: *const types.ObjectId) ?[]const u8 {
+        const hex = oid.toHex();
+        // Build a combined string of all matching decorations
+        var found = false;
+        for (self.entries.items) |*e| {
+            if (std.mem.eql(u8, &e.oid_hex, &hex)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return null;
+
+        // Return first match name for simplicity
+        for (self.entries.items) |*e| {
+            if (std.mem.eql(u8, &e.oid_hex, &hex)) {
+                return e.name;
+            }
+        }
+        return null;
+    }
+};
+
+fn buildDecoMap(allocator: std.mem.Allocator, repo: *repository.Repository) !DecoMap {
+    var dmap = DecoMap.init(allocator);
+    errdefer dmap.deinit();
+
+    const branches = ref_mod.listRefs(allocator, repo.git_dir, "refs/heads/") catch &[_]ref_mod.RefEntry{};
+    defer ref_mod.freeRefEntries(allocator, @constCast(branches));
+    for (branches) |entry| {
+        const prefix = "refs/heads/";
+        const short = if (std.mem.startsWith(u8, entry.name, prefix)) entry.name[prefix.len..] else entry.name;
+        try dmap.addEntry(&entry.oid, short);
+    }
+
+    const tags = ref_mod.listRefs(allocator, repo.git_dir, "refs/tags/") catch &[_]ref_mod.RefEntry{};
+    defer ref_mod.freeRefEntries(allocator, @constCast(tags));
+    for (tags) |entry| {
+        const prefix = "refs/tags/";
+        const short = if (std.mem.startsWith(u8, entry.name, prefix)) entry.name[prefix.len..] else entry.name;
+        var tag_buf: [280]u8 = undefined;
+        const tag_name = std.fmt.bufPrint(&tag_buf, "tag: {s}", .{short}) catch short;
+        try dmap.addEntry(&entry.oid, tag_name);
+    }
+
+    return dmap;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,20 +224,27 @@ pub fn runLog(
 // ---------------------------------------------------------------------------
 
 /// Walks commit history in chronological order (newest first).
-/// Follows first parent for merge commits (simple linear history).
+/// Supports topological ordering when walking from multiple starting points.
 pub const CommitWalker = struct {
     allocator: std.mem.Allocator,
     repo: *repository.Repository,
-    /// Queue of commit OIDs to visit.
-    queue: std.array_list.Managed(types.ObjectId),
+    /// Queue of commit OIDs to visit (with timestamps for sorting).
+    queue: std.array_list.Managed(QueueEntry),
     /// Set of already-visited OIDs to avoid duplicates.
     visited_list: std.array_list.Managed([types.OID_HEX_LEN]u8),
+    /// Follow only first parent of merge commits.
+    first_parent: bool = false,
+
+    const QueueEntry = struct {
+        oid: types.ObjectId,
+        timestamp: i64,
+    };
 
     pub fn init(allocator: std.mem.Allocator, repo: *repository.Repository) CommitWalker {
         return .{
             .allocator = allocator,
             .repo = repo,
-            .queue = std.array_list.Managed(types.ObjectId).init(allocator),
+            .queue = std.array_list.Managed(QueueEntry).init(allocator),
             .visited_list = std.array_list.Managed([types.OID_HEX_LEN]u8).init(allocator),
         };
     }
@@ -121,13 +256,17 @@ pub const CommitWalker = struct {
 
     /// Add a starting commit OID to the walk queue.
     pub fn push(self: *CommitWalker, oid: types.ObjectId) !void {
-        try self.queue.append(oid);
+        const ts = self.getCommitTimestamp(&oid);
+        try self.queue.append(.{ .oid = oid, .timestamp = ts });
+        // Sort by timestamp descending (newest first)
+        sortQueue(self.queue.items);
     }
 
     /// Get the next commit OID in the walk. Returns null when done.
     pub fn next(self: *CommitWalker) !?types.ObjectId {
         while (self.queue.items.len > 0) {
-            const oid = self.queue.orderedRemove(0);
+            const entry = self.queue.orderedRemove(0);
+            const oid = entry.oid;
 
             // Check if visited
             const hex = oid.toHex();
@@ -151,15 +290,66 @@ pub const CommitWalker = struct {
             var parents = tree_diff.getCommitParents(self.allocator, obj.data) catch continue;
             defer parents.deinit();
 
-            // Add all parents to queue (this enables walking merge commits)
-            for (parents.items) |parent_oid| {
-                try self.queue.append(parent_oid);
+            // Add parents to queue
+            if (self.first_parent) {
+                // Only follow first parent
+                if (parents.items.len > 0) {
+                    const ts = self.getCommitTimestamp(&parents.items[0]);
+                    try self.queue.append(.{ .oid = parents.items[0], .timestamp = ts });
+                }
+            } else {
+                for (parents.items) |parent_oid| {
+                    const ts = self.getCommitTimestamp(&parent_oid);
+                    try self.queue.append(.{ .oid = parent_oid, .timestamp = ts });
+                }
             }
+
+            // Re-sort for topological ordering
+            sortQueue(self.queue.items);
 
             return oid;
         }
 
         return null;
+    }
+
+    fn getCommitTimestamp(self: *CommitWalker, oid: *const types.ObjectId) i64 {
+        var obj = self.repo.readObject(self.allocator, oid) catch return 0;
+        defer obj.deinit();
+        if (obj.obj_type != .commit) return 0;
+
+        // Parse committer timestamp
+        var pos: usize = 0;
+        while (pos < obj.data.len) {
+            const line_end = std.mem.indexOfScalarPos(u8, obj.data, pos, '\n') orelse obj.data.len;
+            const line = obj.data[pos..line_end];
+            pos = line_end + 1;
+            if (line.len == 0) break;
+            if (std.mem.startsWith(u8, line, "committer ")) {
+                // Find timestamp after last '>'
+                const gt = std.mem.lastIndexOfScalar(u8, line, '>') orelse continue;
+                if (gt + 2 < line.len) {
+                    const after = line[gt + 2 ..];
+                    const space = std.mem.indexOfScalar(u8, after, ' ') orelse after.len;
+                    return std.fmt.parseInt(i64, after[0..space], 10) catch 0;
+                }
+            }
+        }
+        return 0;
+    }
+
+    fn sortQueue(items: []QueueEntry) void {
+        // Simple insertion sort by timestamp descending
+        for (items, 0..) |_, i| {
+            if (i == 0) continue;
+            var j = i;
+            while (j > 0 and items[j].timestamp > items[j - 1].timestamp) {
+                const tmp = items[j];
+                items[j] = items[j - 1];
+                items[j - 1] = tmp;
+                j -= 1;
+            }
+        }
     }
 };
 
@@ -279,28 +469,42 @@ fn parseAuthorLine(
 // ---------------------------------------------------------------------------
 
 /// Write a commit in full format.
-fn writeFullFormat(stdout: std.fs.File, commit: *CommitInfo, graph: bool, index: usize) !void {
+fn writeFullFormat(stdout: std.fs.File, commit: *CommitInfo, graph: bool, index: usize, deco: ?[]const u8, is_merge: bool, prev_was_merge: bool, prev_at_merge_second: bool) !void {
     var buf: [4096]u8 = undefined;
 
     // Separator (empty line before all but first commit)
     if (index > 0) {
         if (graph) {
-            try stdout.writeAll("| \n");
+            if (prev_was_merge) {
+                try stdout.writeAll("|\\\n");
+            } else if (prev_at_merge_second) {
+                try stdout.writeAll("|/\n");
+            } else {
+                try stdout.writeAll("| \n");
+            }
         } else {
             try stdout.writeAll("\n");
         }
     }
 
+    _ = is_merge;
     const hex = commit.oid.toHex();
 
-    // "commit <hash>"
+    // "commit <hash>" with optional decoration
     const graph_prefix: []const u8 = if (graph) "* " else "";
-    var msg = std.fmt.bufPrint(&buf, "{s}{s}commit {s}{s}\n", .{ graph_prefix, COLOR_YELLOW, &hex, COLOR_RESET }) catch return;
-    try stdout.writeAll(msg);
+    if (deco) |d| {
+        const msg = std.fmt.bufPrint(&buf, "{s}{s}commit {s}{s} ({s}{s}{s})\n", .{
+            graph_prefix, COLOR_YELLOW, &hex, COLOR_RESET, COLOR_GREEN, d, COLOR_RESET,
+        }) catch return;
+        try stdout.writeAll(msg);
+    } else {
+        const msg = std.fmt.bufPrint(&buf, "{s}{s}commit {s}{s}\n", .{ graph_prefix, COLOR_YELLOW, &hex, COLOR_RESET }) catch return;
+        try stdout.writeAll(msg);
+    }
 
     // "Author: Name <email>"
     const author_prefix: []const u8 = if (graph) "| " else "";
-    msg = std.fmt.bufPrint(&buf, "{s}Author: {s} <{s}>\n", .{ author_prefix, commit.author_name, commit.author_email }) catch return;
+    var msg = std.fmt.bufPrint(&buf, "{s}Author: {s} <{s}>\n", .{ author_prefix, commit.author_name, commit.author_email }) catch return;
     try stdout.writeAll(msg);
 
     // "Date:   <formatted date>"
@@ -323,8 +527,17 @@ fn writeFullFormat(stdout: std.fs.File, commit: *CommitInfo, graph: bool, index:
 }
 
 /// Write a commit in oneline format.
-fn writeOnelineFormat(stdout: std.fs.File, commit: *CommitInfo, graph: bool) !void {
+fn writeOnelineFormat(stdout: std.fs.File, commit: *CommitInfo, graph: bool, deco: ?[]const u8, is_merge: bool, prev_was_merge: bool, prev_at_merge_second: bool) !void {
     var buf: [4096]u8 = undefined;
+
+    _ = is_merge;
+
+    // Graph connector lines
+    if (graph and prev_was_merge) {
+        try stdout.writeAll("|\\ \n");
+    } else if (graph and prev_at_merge_second) {
+        try stdout.writeAll("|/ \n");
+    }
 
     const hex = commit.oid.toHex();
     const short_hash = hex[0..7];
@@ -333,14 +546,28 @@ fn writeOnelineFormat(stdout: std.fs.File, commit: *CommitInfo, graph: bool) !vo
     const first_line = getFirstLine(commit.message);
 
     const graph_prefix: []const u8 = if (graph) "* " else "";
-    const msg = std.fmt.bufPrint(&buf, "{s}{s}{s}{s} {s}\n", .{
-        graph_prefix,
-        COLOR_YELLOW,
-        short_hash,
-        COLOR_RESET,
-        first_line,
-    }) catch return;
-    try stdout.writeAll(msg);
+    if (deco) |d| {
+        const msg = std.fmt.bufPrint(&buf, "{s}{s}{s}{s} ({s}{s}{s}) {s}\n", .{
+            graph_prefix,
+            COLOR_YELLOW,
+            short_hash,
+            COLOR_RESET,
+            COLOR_GREEN,
+            d,
+            COLOR_RESET,
+            first_line,
+        }) catch return;
+        try stdout.writeAll(msg);
+    } else {
+        const msg = std.fmt.bufPrint(&buf, "{s}{s}{s}{s} {s}\n", .{
+            graph_prefix,
+            COLOR_YELLOW,
+            short_hash,
+            COLOR_RESET,
+            first_line,
+        }) catch return;
+        try stdout.writeAll(msg);
+    }
 }
 
 /// Get the first non-empty line from a message.

@@ -3,6 +3,7 @@ const repository = @import("repository.zig");
 const cat_file = @import("cat_file.zig");
 const hash_mod = @import("hash.zig");
 const types = @import("types.zig");
+const index_mod = @import("index.zig");
 const loose = @import("loose.zig");
 const config_mod = @import("config.zig");
 const init_mod = @import("init.zig");
@@ -86,6 +87,14 @@ const add_interactive_mod = @import("add_interactive.zig");
 const tag_verify_mod = @import("tag_verify.zig");
 const merge_strategies_mod = @import("merge_strategies.zig");
 const config_ext_mod = @import("config_ext.zig");
+const switch_cmd_mod = @import("switch_cmd.zig");
+const restore_mod = @import("restore.zig");
+const diff_stat_mod = @import("diff_stat.zig");
+const word_diff_mod = @import("word_diff.zig");
+const pull_mod = @import("pull.zig");
+const pager_mod = @import("pager.zig");
+const editor_mod = @import("editor.zig");
+const alias_mod = @import("alias.zig");
 
 comptime {
     _ = @import("hash.zig");
@@ -202,6 +211,15 @@ comptime {
     _ = @import("tag_verify.zig");
     _ = @import("merge_strategies.zig");
     _ = @import("config_ext.zig");
+    _ = @import("switch_cmd.zig");
+    _ = @import("restore.zig");
+    _ = @import("pull.zig");
+    _ = @import("pager.zig");
+    _ = @import("editor.zig");
+    _ = @import("alias.zig");
+    _ = @import("smart_http.zig");
+    _ = @import("smart_ssh.zig");
+    _ = @import("pack_index_writer.zig");
 }
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
@@ -223,10 +241,12 @@ const usage =
     \\Branch & tag:
     \\  branch       List, create, or delete branches
     \\  checkout     Switch branches or restore working tree files
+    \\  switch       Switch branches (safer alternative to checkout)
     \\  merge        Join two or more development histories together
     \\  tag          Create, list, delete or verify a tag object
     \\
     \\Working tree:
+    \\  restore      Restore working tree files
     \\  clean        Remove untracked files from the working tree
     \\  rm           Remove files from the working tree and index
     \\  mv           Move or rename a file, a directory, or a symlink
@@ -238,6 +258,7 @@ const usage =
     \\Remote:
     \\  remote       Manage set of tracked repositories
     \\  fetch        Download objects and refs from another repository
+    \\  pull         Fetch from and integrate with another repository
     \\  push         Update remote refs along with associated objects
     \\
     \\History rewriting:
@@ -339,7 +360,24 @@ pub fn main() !void {
         std.process.exit(1);
     }
 
-    const command = args[1];
+    // Parse global options before the command
+    var cmd_start: usize = 1;
+    while (cmd_start < args.len) {
+        if (std.mem.eql(u8, args[cmd_start], "--no-pager")) {
+            pager_mod.no_pager = true;
+            cmd_start += 1;
+        } else {
+            break;
+        }
+    }
+
+    if (cmd_start >= args.len) {
+        try stderr_file.writeAll(usage);
+        std.process.exit(1);
+    }
+
+    const command = args[cmd_start];
+    const cmd_args = args[cmd_start + 1 ..];
 
     if (std.mem.eql(u8, command, "version") or std.mem.eql(u8, command, "--version")) {
         try stdout_file.writeAll("zig-git version 0.2.0\n");
@@ -347,85 +385,112 @@ pub fn main() !void {
     }
 
     // Commands that don't need a repo
-    if (std.mem.eql(u8, command, "init")) return runInit(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "clone")) return runClone(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "hash-object")) return runHashObject(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "init")) return runInit(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "clone")) return runClone(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "hash-object")) return runHashObject(allocator, cmd_args);
 
     // Commands that need a repo
-    if (std.mem.eql(u8, command, "cat-file")) return runCatFile(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "config")) return runConfig(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "cat-file")) return runCatFile(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "config")) return runConfig(allocator, cmd_args);
     if (std.mem.eql(u8, command, "status")) return runStatusCmd(allocator);
-    if (std.mem.eql(u8, command, "branch")) return runBranchCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "tag")) return runTagCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "reflog")) return runReflogCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "add")) return runAddCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "commit")) return runCommitCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "log")) return runLogCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "diff")) return runDiffCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "show")) return runShowCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "rev-parse")) return runRevParseCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "checkout") or std.mem.eql(u8, command, "switch")) return runCheckoutCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "merge")) return runMergeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "reset")) return runResetCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "stash")) return runStashCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "remote")) return runRemoteCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "fetch")) return runFetchCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "push")) return runPushCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "clean")) return runCleanCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "rm") or std.mem.eql(u8, command, "remove")) return runRmCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "mv") or std.mem.eql(u8, command, "move")) return runMvCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "describe")) return runDescribeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "shortlog")) return runShortlogCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "notes")) return runNotesCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "count-objects")) return runCountObjectsCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "fsck")) return runFsckCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "grep")) return runGrepCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "blame") or std.mem.eql(u8, command, "annotate")) return runBlameCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "cherry-pick")) return runCherryPickCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "rebase")) return runRebaseCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "bisect")) return runBisectCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "worktree")) return runWorktreeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "archive")) return runArchiveCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "gc")) return runGcCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "prune")) return runPruneCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "repack")) return runRepackCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "maintenance")) return runMaintenanceCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "pack-refs")) return runPackRefsCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "bundle")) return runBundleCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "rerere")) return runRerereCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "range-diff")) return runRangeDiffCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "multi-pack-index")) return runMultiPackIndexCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "filter-branch")) return runFilterBranchCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "credential")) return runCredentialCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "var")) return runVarCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "branch")) return runBranchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "tag")) return runTagCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "reflog")) return runReflogCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "add")) return runAddCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "commit")) return runCommitCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "log")) return runLogCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "diff")) return runDiffCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "show")) return runShowCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rev-parse")) return runRevParseCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "checkout")) return runCheckoutCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "switch")) return runSwitchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "restore")) return runRestoreCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "merge")) return runMergeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "pull")) return runPullCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "reset")) return runResetCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "stash")) return runStashCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "remote")) return runRemoteCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "fetch")) return runFetchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "push")) return runPushCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "clean")) return runCleanCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rm") or std.mem.eql(u8, command, "remove")) return runRmCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "mv") or std.mem.eql(u8, command, "move")) return runMvCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "describe")) return runDescribeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "shortlog")) return runShortlogCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "notes")) return runNotesCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "count-objects")) return runCountObjectsCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "fsck")) return runFsckCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "grep")) return runGrepCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "blame") or std.mem.eql(u8, command, "annotate")) return runBlameCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "cherry-pick")) return runCherryPickCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rebase")) return runRebaseCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "bisect")) return runBisectCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "worktree")) return runWorktreeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "archive")) return runArchiveCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "gc")) return runGcCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "prune")) return runPruneCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "repack")) return runRepackCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "maintenance")) return runMaintenanceCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "pack-refs")) return runPackRefsCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "bundle")) return runBundleCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rerere")) return runRerereCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "range-diff")) return runRangeDiffCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "multi-pack-index")) return runMultiPackIndexCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "filter-branch")) return runFilterBranchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "credential")) return runCredentialCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "var")) return runVarCmd(allocator, cmd_args);
     if (std.mem.eql(u8, command, "mktag")) return runMktagCmd(allocator);
     if (std.mem.eql(u8, command, "mktree")) return runMktreeCmd(allocator);
-    if (std.mem.eql(u8, command, "commit-tree")) return runCommitTreeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "check-attr")) return runCheckAttrCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "hook")) return runHookCmdDispatch(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "sparse-checkout")) return runSparseCheckoutCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "ls-files")) return runLsFilesCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "ls-tree")) return runLsTreeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "update-index")) return runUpdateIndexCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "write-tree")) return runWriteTreeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "read-tree")) return runReadTreeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "for-each-ref")) return runForEachRefCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "verify-pack")) return runVerifyPackCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "symbolic-ref")) return runSymbolicRefCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "check-ignore")) return runCheckIgnoreCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "diff-tree")) return runDiffTreeCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "submodule")) return runSubmoduleCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "apply")) return runApplyCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "format-patch")) return runFormatPatchCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "am")) return runAmCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "send-email")) return runSendEmailCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "rev-list")) return runRevListCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "diff-files")) return runDiffFilesCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "diff-index")) return runDiffIndexCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "name-rev")) return runNameRevCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "merge-base")) return runMergeBaseCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "verify-commit")) return runVerifyCommitCmd(allocator, args[2..]);
-    if (std.mem.eql(u8, command, "verify-tag")) return runVerifyTagCmd(allocator, args[2..]);
+    if (std.mem.eql(u8, command, "commit-tree")) return runCommitTreeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "check-attr")) return runCheckAttrCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "hook")) return runHookCmdDispatch(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "sparse-checkout")) return runSparseCheckoutCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "ls-files")) return runLsFilesCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "ls-tree")) return runLsTreeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "update-index")) return runUpdateIndexCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "write-tree")) return runWriteTreeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "read-tree")) return runReadTreeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "for-each-ref")) return runForEachRefCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "verify-pack")) return runVerifyPackCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "symbolic-ref")) return runSymbolicRefCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "check-ignore")) return runCheckIgnoreCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "diff-tree")) return runDiffTreeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "submodule")) return runSubmoduleCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "apply")) return runApplyCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "format-patch")) return runFormatPatchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "am")) return runAmCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "send-email")) return runSendEmailCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rev-list")) return runRevListCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "diff-files")) return runDiffFilesCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "diff-index")) return runDiffIndexCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "name-rev")) return runNameRevCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "merge-base")) return runMergeBaseCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "verify-commit")) return runVerifyCommitCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "verify-tag")) return runVerifyTagCmd(allocator, cmd_args);
+
+    // Before "unknown command" error, check aliases
+    const repo_for_alias = repository.Repository.discover(allocator, null) catch null;
+    if (repo_for_alias) |r| {
+        var repo_val = r;
+        defer repo_val.deinit();
+
+        if (alias_mod.resolveAlias(allocator, repo_val.git_dir, command, cmd_args) catch null) |result| {
+            var alias_result = result;
+            defer alias_result.deinit();
+
+            if (alias_result.is_shell) {
+                if (alias_result.shell_cmd) |shell_cmd| {
+                    alias_mod.executeShellAlias(allocator, shell_cmd, cmd_args) catch |err| {
+                        fatalError("alias execution failed", err);
+                    };
+                    return;
+                }
+            } else if (alias_result.args.len > 0) {
+                // Re-dispatch with the resolved command
+                return dispatchCommand(allocator, alias_result.args[0], alias_result.args[1..]);
+            }
+        }
+    }
 
     var buf: [256]u8 = undefined;
     const msg = std.fmt.bufPrint(&buf, "zig-git: '{s}' is not a zig-git command.\n\n", .{command}) catch {
@@ -757,19 +822,222 @@ fn runDiffCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
 
     var mode: diff_mod.DiffMode = .worktree_vs_index;
     var commit_ref: ?[]const u8 = null;
+    var stat_mode: ?diff_stat_mod.StatMode = null;
+    var wd_mode: ?word_diff_mod.WordDiffMode = null;
 
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--cached") or std.mem.eql(u8, arg, "--staged")) {
             mode = .index_vs_head;
+        } else if (std.mem.eql(u8, arg, "--stat")) {
+            stat_mode = .stat;
+        } else if (std.mem.eql(u8, arg, "--shortstat")) {
+            stat_mode = .shortstat;
+        } else if (std.mem.eql(u8, arg, "--numstat")) {
+            stat_mode = .numstat;
+        } else if (std.mem.eql(u8, arg, "--color-words")) {
+            wd_mode = .color;
+        } else if (word_diff_mod.parseWordDiffArg(arg)) |wm| {
+            wd_mode = wm;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             commit_ref = arg;
             mode = .worktree_vs_commit;
         }
     }
 
+    if (stat_mode) |sm| {
+        runDiffStat(&repo, allocator, mode, commit_ref, sm);
+        return;
+    }
+
+    if (wd_mode) |wm| {
+        runWordDiff(&repo, allocator, mode, commit_ref, wm);
+        return;
+    }
+
     diff_mod.runDiff(&repo, allocator, mode, commit_ref, stdout_file) catch |err| {
         fatalError("diff failed", err);
     };
+}
+
+fn runDiffStat(
+    repo: *repository.Repository,
+    allocator: std.mem.Allocator,
+    mode: diff_mod.DiffMode,
+    commit_ref: ?[]const u8,
+    stat_mode: diff_stat_mod.StatMode,
+) void {
+    // Compute diff and build stats
+    var stats = diff_stat_mod.DiffStats.init(allocator);
+    defer stats.deinit();
+
+    const work_dir = getWorkDirMain(repo.git_dir);
+
+    switch (mode) {
+        .worktree_vs_index => {
+            // Load index and compare with working tree
+            var idx_path_buf: [4096]u8 = undefined;
+            @memcpy(idx_path_buf[0..repo.git_dir.len], repo.git_dir);
+            const suffix = "/index";
+            @memcpy(idx_path_buf[repo.git_dir.len..][0..suffix.len], suffix);
+            const idx_path = idx_path_buf[0 .. repo.git_dir.len + suffix.len];
+
+            var idx = index_mod.Index.readFromFile(allocator, idx_path) catch return;
+            defer idx.deinit();
+
+            for (idx.entries.items) |*entry| {
+                var file_path_buf: [4096]u8 = undefined;
+                @memcpy(file_path_buf[0..work_dir.len], work_dir);
+                file_path_buf[work_dir.len] = '/';
+                @memcpy(file_path_buf[work_dir.len + 1 ..][0..entry.name.len], entry.name);
+                const file_path = file_path_buf[0 .. work_dir.len + 1 + entry.name.len];
+
+                const wt_content = readFileContentsMaybe(allocator, file_path);
+                defer if (wt_content) |c| allocator.free(c);
+                if (wt_content == null) continue;
+
+                const wt_oid = computeBlobOidMain(wt_content.?);
+                if (wt_oid.eql(&entry.oid)) continue;
+
+                const old_content = readBlobContentMain(repo, allocator, &entry.oid);
+                defer if (old_content) |c| allocator.free(c);
+
+                var dr = diff_mod.diffLines(allocator, old_content orelse "", wt_content.?) catch continue;
+                defer dr.deinit();
+
+                const s = diff_stat_mod.DiffStats.computeFromHunks(dr.hunks.items);
+                stats.addFile(entry.name, s.additions, s.deletions, false) catch continue;
+            }
+        },
+        .index_vs_head, .worktree_vs_commit => {
+            // For simplicity, run a regular diff and compute stats
+            _ = commit_ref;
+        },
+    }
+
+    switch (stat_mode) {
+        .stat => diff_stat_mod.formatDiffStat(allocator, &stats, stdout_file, 80) catch return,
+        .shortstat => diff_stat_mod.formatShortStat(allocator, &stats, stdout_file) catch return,
+        .numstat => diff_stat_mod.formatNumStat(&stats, stdout_file) catch return,
+        .dirstat => diff_stat_mod.formatDirStat(allocator, &stats, stdout_file, 3) catch return,
+    }
+}
+
+fn runWordDiff(
+    repo: *repository.Repository,
+    allocator: std.mem.Allocator,
+    mode: diff_mod.DiffMode,
+    commit_ref: ?[]const u8,
+    wd_mode: word_diff_mod.WordDiffMode,
+) void {
+    _ = commit_ref;
+    if (mode != .worktree_vs_index) {
+        // For now, only support worktree vs index for word diff
+        diff_mod.runDiff(repo, allocator, mode, null, stdout_file) catch return;
+        return;
+    }
+
+    const work_dir = getWorkDirMain(repo.git_dir);
+
+    var idx_path_buf: [4096]u8 = undefined;
+    @memcpy(idx_path_buf[0..repo.git_dir.len], repo.git_dir);
+    const suffix = "/index";
+    @memcpy(idx_path_buf[repo.git_dir.len..][0..suffix.len], suffix);
+    const idx_path = idx_path_buf[0 .. repo.git_dir.len + suffix.len];
+
+    var idx = index_mod.Index.readFromFile(allocator, idx_path) catch return;
+    defer idx.deinit();
+
+    for (idx.entries.items) |*entry| {
+        var file_path_buf: [4096]u8 = undefined;
+        @memcpy(file_path_buf[0..work_dir.len], work_dir);
+        file_path_buf[work_dir.len] = '/';
+        @memcpy(file_path_buf[work_dir.len + 1 ..][0..entry.name.len], entry.name);
+        const file_path = file_path_buf[0 .. work_dir.len + 1 + entry.name.len];
+
+        const wt_content = readFileContentsMaybe(allocator, file_path);
+        defer if (wt_content) |c| allocator.free(c);
+        if (wt_content == null) continue;
+
+        const wt_oid = computeBlobOidMain(wt_content.?);
+        if (wt_oid.eql(&entry.oid)) continue;
+
+        const old_content = readBlobContentMain(repo, allocator, &entry.oid);
+        defer if (old_content) |c| allocator.free(c);
+
+        // Write header
+        var hdr_buf: [4096]u8 = undefined;
+        const hdr = std.fmt.bufPrint(&hdr_buf, "diff --git a/{s} b/{s}\n--- a/{s}\n+++ b/{s}\n", .{
+            entry.name, entry.name, entry.name, entry.name,
+        }) catch continue;
+        stdout_file.writeAll(hdr) catch continue;
+
+        var wd_result = word_diff_mod.wordDiff(allocator, old_content orelse "", wt_content.?) catch continue;
+        defer wd_result.deinit();
+
+        word_diff_mod.formatWordDiff(&wd_result, stdout_file, wd_mode) catch continue;
+    }
+}
+
+fn getWorkDirMain(git_dir: []const u8) []const u8 {
+    if (std.mem.endsWith(u8, git_dir, "/.git")) {
+        return git_dir[0 .. git_dir.len - 5];
+    }
+    if (std.fs.path.dirname(git_dir)) |parent| {
+        return parent;
+    }
+    return git_dir;
+}
+
+fn readFileContentsMaybe(allocator: std.mem.Allocator, path: []const u8) ?[]u8 {
+    const file = std.fs.openFileAbsolute(path, .{}) catch return null;
+    defer file.close();
+    const stat = file.stat() catch return null;
+    if (stat.size > 10 * 1024 * 1024) return null;
+    const buf = allocator.alloc(u8, @intCast(stat.size)) catch return null;
+    const n = file.readAll(buf) catch {
+        allocator.free(buf);
+        return null;
+    };
+    if (n < buf.len) {
+        const trimmed = allocator.alloc(u8, n) catch {
+            allocator.free(buf);
+            return null;
+        };
+        @memcpy(trimmed, buf[0..n]);
+        allocator.free(buf);
+        return trimmed;
+    }
+    return buf;
+}
+
+fn readBlobContentMain(repo: *repository.Repository, allocator: std.mem.Allocator, oid: *const types.ObjectId) ?[]u8 {
+    var obj = repo.readObject(allocator, oid) catch return null;
+    if (obj.obj_type != .blob) {
+        obj.deinit();
+        return null;
+    }
+    const data = allocator.alloc(u8, obj.data.len) catch {
+        obj.deinit();
+        return null;
+    };
+    @memcpy(data, obj.data);
+    obj.deinit();
+    return data;
+}
+
+fn computeBlobOidMain(data: []const u8) types.ObjectId {
+    var header_buf: [64]u8 = undefined;
+    var hstream = std.io.fixedBufferStream(&header_buf);
+    const hwriter = hstream.writer();
+    hwriter.writeAll("blob ") catch return types.ObjectId.ZERO;
+    hwriter.print("{d}", .{data.len}) catch return types.ObjectId.ZERO;
+    hwriter.writeByte(0) catch return types.ObjectId.ZERO;
+    const header = header_buf[0..hstream.pos];
+
+    var hasher = hash_mod.Sha1.init(.{});
+    hasher.update(header);
+    hasher.update(data);
+    return types.ObjectId{ .bytes = hasher.finalResult() };
 }
 
 // --- History commands ---
@@ -799,6 +1067,14 @@ fn runLogCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
         } else if (std.mem.startsWith(u8, arg, "--date=")) {
             fmt_opts.date_format = log_format_mod.parseDateOption(arg);
             use_advanced_format = true;
+        } else if (std.mem.eql(u8, arg, "--all")) {
+            opts.all = true;
+        } else if (std.mem.eql(u8, arg, "--first-parent")) {
+            opts.first_parent = true;
+        } else if (std.mem.eql(u8, arg, "--decorate")) {
+            opts.decorate = true;
+        } else if (std.mem.eql(u8, arg, "--no-decorate")) {
+            opts.decorate = false;
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             opts.start_ref = arg;
         }
@@ -999,6 +1275,22 @@ fn runCheckoutCmd(allocator: std.mem.Allocator, args: []const []const u8) !void 
     };
 }
 
+fn runSwitchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    switch_cmd_mod.runSwitch(&repo, allocator, args) catch |err| {
+        fatalError("switch failed", err);
+    };
+}
+
+fn runRestoreCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    restore_mod.runRestore(&repo, allocator, args) catch |err| {
+        fatalError("restore failed", err);
+    };
+}
+
 fn runMergeCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     var repo = discoverRepo(allocator);
     defer repo.deinit();
@@ -1051,6 +1343,14 @@ fn runFetchCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
     defer repo.deinit();
     fetch_mod.runFetch(allocator, repo.git_dir, args) catch |err| {
         fatalError("fetch failed", err);
+    };
+}
+
+fn runPullCmd(allocator: std.mem.Allocator, args: []const []const u8) !void {
+    var repo = discoverRepo(allocator);
+    defer repo.deinit();
+    pull_mod.runPull(&repo, allocator, args) catch |err| {
+        fatalError("pull failed", err);
     };
 }
 
@@ -1570,6 +1870,54 @@ fn runVerifyTagCmd(allocator: std.mem.Allocator, args: []const []const u8) !void
 }
 
 // --- Helpers ---
+
+/// Dispatch a command by name with the given arguments.
+/// Used for alias resolution to re-dispatch after expanding the alias.
+fn dispatchCommand(allocator: std.mem.Allocator, command: []const u8, cmd_args: []const []const u8) !void {
+    if (std.mem.eql(u8, command, "init")) return runInit(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "clone")) return runClone(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "hash-object")) return runHashObject(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "cat-file")) return runCatFile(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "config")) return runConfig(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "status")) return runStatusCmd(allocator);
+    if (std.mem.eql(u8, command, "branch")) return runBranchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "tag")) return runTagCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "reflog")) return runReflogCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "add")) return runAddCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "commit")) return runCommitCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "log")) return runLogCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "diff")) return runDiffCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "show")) return runShowCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rev-parse")) return runRevParseCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "checkout")) return runCheckoutCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "switch")) return runSwitchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "restore")) return runRestoreCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "merge")) return runMergeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "pull")) return runPullCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "reset")) return runResetCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "stash")) return runStashCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "remote")) return runRemoteCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "fetch")) return runFetchCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "push")) return runPushCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "clean")) return runCleanCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rm") or std.mem.eql(u8, command, "remove")) return runRmCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "mv") or std.mem.eql(u8, command, "move")) return runMvCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "describe")) return runDescribeCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "shortlog")) return runShortlogCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "notes")) return runNotesCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "grep")) return runGrepCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "blame") or std.mem.eql(u8, command, "annotate")) return runBlameCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "cherry-pick")) return runCherryPickCmd(allocator, cmd_args);
+    if (std.mem.eql(u8, command, "rebase")) return runRebaseCmd(allocator, cmd_args);
+
+    var buf: [256]u8 = undefined;
+    const msg = std.fmt.bufPrint(&buf, "zig-git: '{s}' is not a zig-git command.\n\n", .{command}) catch {
+        try stderr_file.writeAll("zig-git: unknown command\n");
+        std.process.exit(1);
+    };
+    try stderr_file.writeAll(msg);
+    std.process.exit(1);
+}
 
 fn discoverRepo(allocator: std.mem.Allocator) repository.Repository {
     return repository.Repository.discover(allocator, null) catch {

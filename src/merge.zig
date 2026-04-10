@@ -371,15 +371,129 @@ fn removeEmptyParents(work_dir: []const u8, path: []const u8) void {
     }
 }
 
-/// Write conflict markers for a file.
+/// Perform line-by-line three-way merge. Returns merged content and whether there were conflicts.
+fn threeWayMergeContent(
+    allocator: std.mem.Allocator,
+    base_data: []const u8,
+    ours_data: []const u8,
+    theirs_data: []const u8,
+    target_name: []const u8,
+) !struct { content: []u8, has_conflict: bool } {
+    // Split all three into lines
+    var base_lines = std.array_list.Managed([]const u8).init(allocator);
+    defer base_lines.deinit();
+    var ours_lines = std.array_list.Managed([]const u8).init(allocator);
+    defer ours_lines.deinit();
+    var theirs_lines = std.array_list.Managed([]const u8).init(allocator);
+    defer theirs_lines.deinit();
+
+    splitIntoLines(base_data, &base_lines) catch {};
+    splitIntoLines(ours_data, &ours_lines) catch {};
+    splitIntoLines(theirs_data, &theirs_lines) catch {};
+
+    var result = std.array_list.Managed(u8).init(allocator);
+    errdefer result.deinit();
+    var has_conflict = false;
+
+    // Simple line-by-line merge: walk all three in lockstep
+    const max_len = @max(base_lines.items.len, @max(ours_lines.items.len, theirs_lines.items.len));
+    var i: usize = 0;
+
+    while (i < max_len) : (i += 1) {
+        const base_line: ?[]const u8 = if (i < base_lines.items.len) base_lines.items[i] else null;
+        const ours_line: ?[]const u8 = if (i < ours_lines.items.len) ours_lines.items[i] else null;
+        const theirs_line: ?[]const u8 = if (i < theirs_lines.items.len) theirs_lines.items[i] else null;
+
+        const base_eq_ours = strEql(base_line, ours_line);
+        const base_eq_theirs = strEql(base_line, theirs_line);
+        const ours_eq_theirs = strEql(ours_line, theirs_line);
+
+        if (base_eq_ours and base_eq_theirs) {
+            // All same - emit
+            if (ours_line) |l| {
+                try result.appendSlice(l);
+                try result.append('\n');
+            }
+        } else if (base_eq_ours and !base_eq_theirs) {
+            // Changed only in theirs - take theirs
+            if (theirs_line) |l| {
+                try result.appendSlice(l);
+                try result.append('\n');
+            }
+            // theirs_line == null means deleted in theirs, don't emit
+        } else if (!base_eq_ours and base_eq_theirs) {
+            // Changed only in ours - take ours
+            if (ours_line) |l| {
+                try result.appendSlice(l);
+                try result.append('\n');
+            }
+            // ours_line == null means deleted in ours, don't emit
+        } else if (ours_eq_theirs) {
+            // Both changed same way - take either
+            if (ours_line) |l| {
+                try result.appendSlice(l);
+                try result.append('\n');
+            }
+        } else {
+            // Conflict: both sides changed differently
+            has_conflict = true;
+            try result.appendSlice("<<<<<<< HEAD\n");
+            if (ours_line) |l| {
+                try result.appendSlice(l);
+                try result.append('\n');
+            }
+            try result.appendSlice("=======\n");
+            if (theirs_line) |l| {
+                try result.appendSlice(l);
+                try result.append('\n');
+            }
+            var marker_buf: [256]u8 = undefined;
+            const marker = std.fmt.bufPrint(&marker_buf, ">>>>>>> {s}\n", .{target_name}) catch ">>>>>>> merge\n";
+            try result.appendSlice(marker);
+        }
+    }
+
+    return .{ .content = try result.toOwnedSlice(), .has_conflict = has_conflict };
+}
+
+fn splitIntoLines(text: []const u8, lines: *std.array_list.Managed([]const u8)) !void {
+    if (text.len == 0) return;
+    var iter = std.mem.splitScalar(u8, text, '\n');
+    while (iter.next()) |line| {
+        if (iter.peek() == null and line.len == 0) break;
+        try lines.append(line);
+    }
+}
+
+fn strEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
+}
+
+/// Write conflict markers for a file with proper branch name.
 fn writeConflictFile(
     allocator: std.mem.Allocator,
     repo: *repository.Repository,
     work_dir: []const u8,
     rel_path: []const u8,
+    base_oid: ?*const types.ObjectId,
     ours_oid: ?*const types.ObjectId,
     theirs_oid: ?*const types.ObjectId,
+    target_name: []const u8,
 ) !void {
+    var base_data: []const u8 = "";
+    var base_obj: ?types.Object = null;
+    defer if (base_obj) |*o| o.deinit();
+
+    if (base_oid) |oid| {
+        const obj = repo.readObject(allocator, oid) catch null;
+        if (obj) |o| {
+            base_obj = o;
+            base_data = o.data;
+        }
+    }
+
     var ours_data: []const u8 = "";
     var ours_obj: ?types.Object = null;
     defer if (ours_obj) |*o| o.deinit();
@@ -400,22 +514,35 @@ fn writeConflictFile(
         theirs_data = obj.data;
     }
 
-    // Build conflict content
-    var content = std.array_list.Managed(u8).init(allocator);
-    defer content.deinit();
+    // Try line-by-line 3-way merge
+    const merge_result = threeWayMergeContent(allocator, base_data, ours_data, theirs_data, target_name) catch {
+        // Fallback to simple conflict markers
+        var content = std.array_list.Managed(u8).init(allocator);
+        defer content.deinit();
 
-    try content.appendSlice("<<<<<<< HEAD\n");
-    try content.appendSlice(ours_data);
-    if (ours_data.len > 0 and ours_data[ours_data.len - 1] != '\n') {
-        try content.append('\n');
-    }
-    try content.appendSlice("=======\n");
-    try content.appendSlice(theirs_data);
-    if (theirs_data.len > 0 and theirs_data[theirs_data.len - 1] != '\n') {
-        try content.append('\n');
-    }
-    try content.appendSlice(">>>>>>> merge\n");
+        try content.appendSlice("<<<<<<< HEAD\n");
+        try content.appendSlice(ours_data);
+        if (ours_data.len > 0 and ours_data[ours_data.len - 1] != '\n') {
+            try content.append('\n');
+        }
+        try content.appendSlice("=======\n");
+        try content.appendSlice(theirs_data);
+        if (theirs_data.len > 0 and theirs_data[theirs_data.len - 1] != '\n') {
+            try content.append('\n');
+        }
+        var marker_buf2: [256]u8 = undefined;
+        const marker2 = std.fmt.bufPrint(&marker_buf2, ">>>>>>> {s}\n", .{target_name}) catch ">>>>>>> merge\n";
+        try content.appendSlice(marker2);
 
+        try writeToPath(work_dir, rel_path, content.items);
+        return;
+    };
+    defer allocator.free(merge_result.content);
+
+    try writeToPath(work_dir, rel_path, merge_result.content);
+}
+
+fn writeToPath(work_dir: []const u8, rel_path: []const u8, content: []const u8) !void {
     // Write to working tree
     var path_buf: [4096]u8 = undefined;
     var stream = std.io.fixedBufferStream(&path_buf);
@@ -430,7 +557,7 @@ fn writeConflictFile(
 
     const file = try std.fs.createFileAbsolute(full_path, .{ .truncate = true });
     defer file.close();
-    try file.writeAll(content.items);
+    try file.writeAll(content);
 }
 
 /// Write MERGE_HEAD file.
@@ -533,11 +660,18 @@ pub fn runMerge(
 ) !void {
     // Parse args
     var abort = false;
+    var no_commit = false;
+    var squash = false;
     var target_name: ?[]const u8 = null;
 
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--abort")) {
             abort = true;
+        } else if (std.mem.eql(u8, arg, "--no-commit")) {
+            no_commit = true;
+        } else if (std.mem.eql(u8, arg, "--squash")) {
+            squash = true;
+            no_commit = true; // squash implies no-commit
         } else if (!std.mem.startsWith(u8, arg, "-")) {
             if (target_name == null) {
                 target_name = arg;
@@ -593,7 +727,7 @@ pub fn runMerge(
     }
 
     // Three-way merge
-    return threeWayMerge(repo, allocator, head_oid, target_oid, target_name.?);
+    return threeWayMerge(repo, allocator, head_oid, target_oid, target_name.?, no_commit, squash);
 }
 
 /// Fast-forward merge: just update HEAD to target.
@@ -682,6 +816,8 @@ fn threeWayMerge(
     head_oid: types.ObjectId,
     target_oid: types.ObjectId,
     target_name: []const u8,
+    no_commit: bool,
+    squash: bool,
 ) !void {
     // Find merge base
     const base_oid = try findMergeBase(allocator, repo, &head_oid, &target_oid) orelse {
@@ -787,10 +923,11 @@ fn threeWayMerge(
             try conflict_strings.append(path_copy);
             try conflicts.append(path_copy);
 
-            // Write conflict markers to working tree
+            // Write conflict markers to working tree with line-level 3-way merge
+            const base_oid_ptr: ?*const types.ObjectId = if (base_entry) |e| &e.oid else null;
             const ours_oid_ptr: ?*const types.ObjectId = if (ours_entry) |e| &e.oid else null;
             const theirs_oid_ptr: ?*const types.ObjectId = if (theirs_entry) |e| &e.oid else null;
-            writeConflictFile(allocator, repo, work_dir, path, ours_oid_ptr, theirs_oid_ptr) catch {};
+            writeConflictFile(allocator, repo, work_dir, path, base_oid_ptr, ours_oid_ptr, theirs_oid_ptr, target_name) catch {};
 
             // Add ours version to result (for index) if it exists
             if (ours_entry) |e| {
@@ -853,26 +990,8 @@ fn threeWayMerge(
         std.process.exit(1);
     }
 
-    // No conflicts - create merge commit
-    // Build the merged tree from result_entries
+    // No conflicts - build the merged tree from result_entries
     const merged_tree_oid = try createTreeFromFlat(allocator, repo.git_dir, result_entries.items);
-
-    // Create merge commit with two parents
-    var merge_msg_buf: [256]u8 = undefined;
-    const merge_msg = std.fmt.bufPrint(&merge_msg_buf, "Merge branch '{s}'", .{target_name}) catch "Merge";
-
-    const parents = [_]types.ObjectId{ head_oid, target_oid };
-    const merge_commit_oid = try createCommitObject(allocator, repo.git_dir, merged_tree_oid, &parents, merge_msg);
-
-    // Update current branch ref
-    const head_ref = ref_mod.readHead(allocator, repo.git_dir) catch null;
-    defer if (head_ref) |h| allocator.free(h);
-
-    if (head_ref) |branch_ref| {
-        try ref_mod.createRef(allocator, repo.git_dir, branch_ref, merge_commit_oid, null);
-    } else {
-        writeDetachedHead(repo.git_dir, merge_commit_oid) catch {};
-    }
 
     // Update working tree with merged result
     var merged_flat = try checkout_mod.flattenTree(allocator, repo, &merged_tree_oid);
@@ -893,6 +1012,43 @@ fn threeWayMerge(
     try idx_w.writeAll("/index");
     const idx_path = idx_path_buf[0..idx_stream.pos];
     try new_idx.writeToFile(idx_path);
+
+    if (squash) {
+        // Squash merge: apply changes but don't create merge commit
+        // Write MERGE_MSG for the user to commit manually
+        var merge_msg_buf2: [256]u8 = undefined;
+        const merge_msg2 = std.fmt.bufPrint(&merge_msg_buf2, "Squashed commit of the following:\n\nMerge branch '{s}'", .{target_name}) catch "Squashed commit";
+        writeMergeMsg(repo.git_dir, merge_msg2) catch {};
+        try stdout_file.writeAll("Squash commit -- not updating HEAD\n");
+        return;
+    }
+
+    if (no_commit) {
+        // Merge but don't auto-commit - write MERGE_HEAD and MERGE_MSG
+        try writeMergeHead(repo.git_dir, target_oid);
+        var merge_msg_buf3: [256]u8 = undefined;
+        const merge_msg3 = std.fmt.bufPrint(&merge_msg_buf3, "Merge branch '{s}'", .{target_name}) catch "Merge";
+        writeMergeMsg(repo.git_dir, merge_msg3) catch {};
+        try stdout_file.writeAll("Automatic merge went well; stopped before committing as requested\n");
+        return;
+    }
+
+    // Create merge commit with two parents
+    var merge_msg_buf: [256]u8 = undefined;
+    const merge_msg = std.fmt.bufPrint(&merge_msg_buf, "Merge branch '{s}'", .{target_name}) catch "Merge";
+
+    const parents = [_]types.ObjectId{ head_oid, target_oid };
+    const merge_commit_oid = try createCommitObject(allocator, repo.git_dir, merged_tree_oid, &parents, merge_msg);
+
+    // Update current branch ref
+    const head_ref = ref_mod.readHead(allocator, repo.git_dir) catch null;
+    defer if (head_ref) |h| allocator.free(h);
+
+    if (head_ref) |branch_ref| {
+        try ref_mod.createRef(allocator, repo.git_dir, branch_ref, merge_commit_oid, null);
+    } else {
+        writeDetachedHead(repo.git_dir, merge_commit_oid) catch {};
+    }
 
     // Reflog
     var reflog_msg_buf: [256]u8 = undefined;

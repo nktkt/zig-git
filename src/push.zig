@@ -5,6 +5,11 @@ const remote_mod = @import("remote.zig");
 const ref_mod = @import("ref.zig");
 const loose = @import("loose.zig");
 const object_walk = @import("object_walk.zig");
+const url_mod = @import("url.zig");
+const smart_http = @import("smart_http.zig");
+const smart_ssh = @import("smart_ssh.zig");
+const transport_mod = @import("transport.zig");
+const pack_writer = @import("pack_writer.zig");
 
 const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
@@ -59,7 +64,19 @@ pub fn push(
     };
     defer allocator.free(url);
 
-    // Resolve to local path
+    // Detect URL type and route
+    const parsed = url_mod.parse(url) catch {
+        try stderr_file.writeAll("fatal: unable to parse remote URL\n");
+        return error.InvalidUrl;
+    };
+
+    if (parsed.isHttp() or parsed.isSsh()) {
+        // Network push not yet fully implemented - report this clearly
+        try stderr_file.writeAll("fatal: network push is not yet implemented. Use local push or git.\n");
+        return error.UnsupportedProtocol;
+    }
+
+    // Local push (original implementation)
     const local_path = remote_mod.resolveLocalUrl(url) orelse {
         try stderr_file.writeAll("fatal: only local remotes are supported for push\n");
         return error.UnsupportedProtocol;
@@ -251,10 +268,10 @@ fn updateRemoteRef(
     ref_mod.createRef(allocator, local_git_dir, tracking_ref, oid.*, null) catch {};
 }
 
-fn buildRefName(buf: []u8, prefix: []const u8, name: []const u8) []const u8 {
-    @memcpy(buf[0..prefix.len], prefix);
-    @memcpy(buf[prefix.len..][0..name.len], name);
-    return buf[0 .. prefix.len + name.len];
+fn buildRefName(buf: []u8, prefix_str: []const u8, name: []const u8) []const u8 {
+    @memcpy(buf[0..prefix_str.len], prefix_str);
+    @memcpy(buf[prefix_str.len..][0..name.len], name);
+    return buf[0 .. prefix_str.len + name.len];
 }
 
 /// Check if ancestor_oid is an ancestor of descendant_oid.
