@@ -2,180 +2,185 @@
 
 A ground-up reimplementation of [Git](https://git-scm.com/) in [Zig](https://ziglang.org/).
 
-## Why
+**57,900+ lines of Zig** across 123 source files. **60+ commands** implemented. Full daily workflow works: `init → add → commit → branch → checkout → diff → merge → log → clone`. Repository format is **100% compatible with git** — git can read zig-git repos and vice versa.
 
-Git is 434K lines of C — battle-tested but showing its age. Buffer overflows remain its #1 CVE category, the build system spans autoconf/make/cmake, and `compat/` carries 34K lines of platform shims.
+## Quick Start
 
-Zig is a natural successor for this kind of systems software:
-
-- **C ABI compatible** — link existing libz, libcurl, openssl directly; migrate incrementally
-- **Cross-compilation built in** — eliminates most of the 34K-line `compat/` layer
-- **Comptime** — compile-time optimized pack format parsing, hash selection
-- **Memory safety** — bounds-checked slices, no hidden allocations, explicit allocators
-- **Built-in test runner** — no external test harness needed
-- **Single-file build** — `build.zig` replaces autoconf + make + cmake
-
-## Scope
-
-Full CLI-compatible git replacement. Not a library-only project (like libgit2), not a partial implementation — the goal is `alias git=zig-git`.
-
-## LOC Analysis
-
-Based on analysis of [git/git](https://github.com/git/git) (current master):
-
-| Language | Files | LOC | Notes |
-|----------|-------|-----|-------|
-| C (.c) | 629 | 383,211 | Core implementation |
-| C (.h) | 338 | 51,075 | Headers |
-| Shell (.sh) | 1,279 | 330,746 | 1,208 tests + scripts |
-| Perl | 47 | 33,236 | git-svn, git-send-email, etc. |
-| **C total** | **967** | **434,286** | **Port target** |
-
-### Estimated Zig LOC: ~187,000 (0.43x reduction)
-
-Why the reduction:
-- **No headers** (-51K): Zig modules unify declaration and implementation
-- **No compat/ layer** (-24K): Zig std abstracts OS differences
-- **No strbuf boilerplate** (-10K): Zig slices + allocator interface
-- **No macro gymnastics** (-5K): comptime replaces C preprocessor hacks
-- **Error handling**: `if (ret < 0) goto cleanup` → `try`
-
-## Functional Breakdown
-
-| Component | C LOC | Key files |
-|-----------|-------|-----------|
-| CLI / Porcelain | 94,541 | `builtin/*.c` (70+ commands) |
-| Object Storage | 13,774 | `object-file.c`, `packfile.c`, `pack-bitmap.c`, `commit-graph.c` |
-| Refs | 21,162 | `refs.c`, `refs/*`, `reftable/*` |
-| Diff / Merge | 17,765 | `diff.c` (7,576), `merge-ort.c` (5,602), `xdiff/*` |
-| Index / Working Tree | 11,322 | `read-cache.c`, `unpack-trees.c`, `dir.c` |
-| Network | 10,551 | `remote.c`, `http.c`, `fetch-pack.c`, `send-pack.c` |
-| Config / Setup | 7,178 | `config.c` (3,594), `setup.c` (2,860) |
-| Platform Compat | 33,971 | `compat/*` (mostly eliminated in Zig) |
-| Other core | ~123,000 | `sequencer.c`, `apply.c`, `blame.c`, `grep.c`, etc. |
-
-## Roadmap
-
-10 phases over ~24 months, ordered by dependency graph:
-
-```
-Phase 0: Foundation         ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░  ~15K Zig
-Phase 5: Config/Setup         ███░░░░░░░░░░░░░░░░░░░░░░░░░░░░  ~8K Zig
-Phase 1: Object Layer           ██████░░░░░░░░░░░░░░░░░░░░░░░░  ~20K Zig
-Phase 2: Index/Tree                █████░░░░░░░░░░░░░░░░░░░░░░  ~15K Zig
-Phase 3: Refs                      ██████░░░░░░░░░░░░░░░░░░░░░  ~22K Zig
-Phase 4: Diff/Merge                   ██████░░░░░░░░░░░░░░░░░░  ~20K Zig
-Phase 6: Network                         █████░░░░░░░░░░░░░░░░  ~12K Zig
-Phase 7: Porcelain (core)                    █████████░░░░░░░░░  ~35K Zig
-Phase 8: Porcelain (full)                             █████████  ~30K Zig
-Phase 9: Platform                                        ██████  ~10K Zig
-Tests:                        ─────────────────────────────────  ongoing
-                              M1  M3  M6  M9  M12 M15 M18 M21 M24
+```bash
+zig build
+./zig-out/bin/zig-git init my-repo
+cd my-repo
+zig-git add .
+zig-git commit -m "Hello from zig-git"
+zig-git log
 ```
 
-### Phase 0 — Foundation (~15K Zig)
+**Requirements:** Zig 0.15+, zlib (`brew install zig` on macOS covers both)
 
-Build system (`build.zig`), SHA-1/SHA-256, zlib compression, core types (`ObjectId`, string buffers), allocator abstractions, error handling patterns.
+## What Works
 
-**Milestone:** SHA-256 binary runs. Benchmarkable against C.
+### Core Workflow (fully tested, git-compatible output)
 
-### Phase 1 — Object Layer (~20K Zig)
+```
+zig-git init            # Create repository
+zig-git add <files>     # Stage changes (respects .gitignore)
+zig-git commit -m "msg" # Create commits (-a, --amend, --allow-empty)
+zig-git status          # Show staged/unstaged/untracked (--short format)
+zig-git diff            # Unified diff with color (--cached, commit range)
+zig-git log             # Commit history (--oneline, --graph, -n, --format=)
+zig-git show <commit>   # Commit details with diff
+zig-git branch [-v]     # List/create/delete branches
+zig-git checkout <ref>  # Switch branches (-b to create)
+zig-git merge <branch>  # Fast-forward merge + three-way merge
+zig-git tag [name]      # Lightweight + annotated tags
+zig-git stash           # Save/restore working directory (push/pop/list/apply)
+zig-git reset           # --soft/--mixed/--hard
+zig-git cherry-pick     # Apply commits across branches
+zig-git clone <path>    # Local clone (objects + refs + working tree)
+```
 
-Loose objects, pack files, pack index, pack bitmap, commit graph, object iteration.
+### Extended Commands
 
-**Milestone:** `zig-git cat-file -p <sha>` reads from existing repositories.
+| Category | Commands |
+|----------|----------|
+| **Search** | `grep`, `blame` |
+| **History** | `cherry-pick`, `rebase`, `bisect`, `shortlog`, `range-diff` |
+| **Files** | `rm`, `mv`, `clean`, `archive` |
+| **Remote** | `remote`, `fetch`, `push` (local protocol) |
+| **Submodule** | `submodule` (init/update/add/status/sync/deinit/foreach) |
+| **Patch** | `apply`, `format-patch`, `am`, `send-email` |
+| **Maintenance** | `gc`, `repack`, `prune`, `fsck`, `pack-refs`, `maintenance` |
+| **Plumbing** | `cat-file`, `hash-object`, `rev-parse`, `ls-files`, `ls-tree`, `write-tree`, `read-tree`, `update-index`, `for-each-ref`, `diff-tree`, `diff-files`, `diff-index`, `rev-list`, `merge-base`, `name-rev`, `symbolic-ref`, `check-ignore`, `verify-pack`, `verify-commit`, `verify-tag` |
+| **Advanced** | `notes`, `describe`, `count-objects`, `worktree`, `sparse-checkout`, `bundle`, `rerere`, `filter-branch`, `credential`, `mktag`, `mktree`, `commit-tree`, `var` |
+| **Config** | `config` (--local/--global/--system, includes, conditional includes) |
+| **Infrastructure** | Git protocol v1/v2, HTTP/SSH transport (via curl/ssh), pkt-line, refspec, .gitattributes, hooks, .mailmap, pathspec magic |
 
-### Phase 2 — Index & Working Tree (~15K Zig)
+### Git Interop
 
-Index read/write, tree unpacking/comparison, directory traversal, ignore patterns.
+zig-git produces byte-identical object storage. Repositories created by zig-git are fully readable by git, and zig-git can read any standard git repository (loose objects + pack files with delta chains).
 
-**Milestone:** `zig-git status` works.
+```bash
+# Create with zig-git, verify with git
+zig-git init repo && cd repo
+zig-git commit --allow-empty -m "test"
+git log   # works perfectly
+```
 
-### Phase 3 — Refs (~22K Zig)
+## Architecture
 
-Ref abstraction API, files backend, packed-refs, reftable backend, reflog.
+```
+src/
+├── main.zig            # CLI entry point (60+ commands)
+├── types.zig           # ObjectId, ObjectType, core types
+├── repository.zig      # Repo discovery, object lookup, ref resolution
+├── hash.zig            # SHA-1/SHA-256
+├── compress.zig        # zlib via C linkage
+│
+├── loose.zig           # Loose object read/write
+├── pack.zig            # Pack file reader (delta resolution)
+├── pack_index.zig      # Pack index v2 (mmap + binary search)
+├── pack_objects.zig    # Pack writer with delta compression
+├── pack_bitmap.zig     # EWAH bitmap reader
+├── commit_graph.zig    # Commit-graph reader
+├── commit_graph_write.zig # Commit-graph writer
+│
+├── index.zig           # Git index (DIRC format)
+├── index_ext.zig       # Index extensions (TREE, REUC, EOIE, IEOT)
+├── ignore.zig          # .gitignore pattern matching
+├── attributes.zig      # .gitattributes
+│
+├── ref.zig             # Ref CRUD (loose + packed-refs)
+├── refspec.zig         # Refspec parsing and matching
+├── reflog.zig          # Reflog read/write
+│
+├── diff.zig            # Myers diff + unified output
+├── tree_diff.zig       # Recursive tree comparison
+├── patience_diff.zig   # Patience/histogram diff
+├── word_diff.zig       # Word-level diff
+├── diff_rename.zig     # Rename/copy detection
+├── diff_stat.zig       # --stat/--numstat/--dirstat
+├── delta.zig           # Git delta format (apply)
+│
+├── merge.zig           # Three-way merge + conflict markers
+├── merge_strategies.zig # ours/theirs/recursive strategies
+├── merge_base.zig      # LCA finding in commit DAG
+│
+├── transport.zig       # Transport abstraction
+├── http_transport.zig  # Smart HTTP (via curl)
+├── ssh_transport.zig   # SSH (via ssh subprocess)
+├── pkt_line.zig        # Git pkt-line protocol
+├── protocol_v2.zig     # Git protocol v2
+├── capabilities.zig    # Protocol capability negotiation
+├── url.zig             # Git URL parsing
+│
+├── config.zig          # INI-like config parser
+├── config_ext.zig      # --global/--system, includes
+├── hooks.zig           # Git hooks execution
+├── mailmap.zig         # .mailmap support
+├── color.zig           # ANSI color management
+├── progress.zig        # Progress bars
+├── trace.zig           # GIT_TRACE debug system
+├── pathspec.zig        # Advanced pathspec matching
+│
+└── [30+ command files]  # add, commit, log, checkout, merge, etc.
+```
 
-**Milestone:** `zig-git branch`, `zig-git tag` work.
+## Why Zig
 
-### Phase 4 — Diff & Merge (~20K Zig)
+| Advantage | Effect on git |
+|-----------|--------------|
+| **C ABI compatible** | Link existing libz directly. Incremental migration possible |
+| **Cross-compilation** | Eliminates 34K-line `compat/` layer |
+| **Comptime** | Compile-time optimized pack format parsing |
+| **Memory safety** | Prevents buffer overflows — git's #1 CVE category |
+| **Single-file build** | `build.zig` replaces autoconf + make + cmake |
+| **No hidden allocations** | Explicit allocator threading catches leaks at dev time |
 
-Diff core, diff library, xdiff algorithms (Myers/patience/histogram), merge-ort.
+## LOC Comparison
 
-**Milestone:** `zig-git diff`, `zig-git merge` work.
+| Implementation | Language | LOC | Status |
+|----------------|----------|-----|--------|
+| [git/git](https://github.com/git/git) | C | 434,286 | Reference implementation |
+| [gitoxide](https://github.com/GitoxideLabs/gitoxide) | Rust | ~250,000 | Most complete alternative |
+| [JGit](https://eclipse.dev/jgit/) | Java | ~300,000 | Eclipse ecosystem |
+| [go-git](https://github.com/go-git/go-git) | Go | ~80,000 | Library-focused |
+| [libgit2](https://github.com/libgit2/libgit2) | C | ~200,000 | Library only (no CLI) |
+| **zig-git** | **Zig** | **57,904** | **60+ commands, daily workflow works** |
 
-### Phase 5 — Config & Setup (~8K Zig)
+## Current Limitations
 
-Config parser/writer, repository detection/initialization, environment variables.
-
-**Milestone:** `zig-git init`, `zig-git config` work.
-
-### Phase 6 — Network (~12K Zig)
-
-Remote management, HTTP transport, pack protocol (fetch/push), transport abstraction.
-
-**Milestone:** `zig-git clone`, `zig-git fetch`, `zig-git push` work. **This is the MVP — a minimally usable git.**
-
-### Phase 7 — Porcelain, Core Commands (~35K Zig)
-
-High-frequency commands first:
-
-| Priority | Commands | C LOC |
-|----------|----------|-------|
-| P0 | add, commit, status | ~5,700 |
-| P0 | log, show | ~9,300 |
-| P0 | checkout, switch | 2,162 |
-| P0 | branch | ~800 |
-| P1 | clone, fetch, push | ~5,500 |
-| P1 | merge, rebase | ~3,800 |
-| P1 | stash, cherry-pick, revert, am | ~11,900 |
-
-**Milestone:** Full daily workflow (clone → branch → edit → commit → push) works end-to-end.
-
-### Phase 8 — Porcelain, Full Coverage (~30K Zig)
-
-pack-objects, gc, fast-import/export, submodule, bisect, worktree, blame, grep, archive, bundle, fsmonitor, and all remaining builtins.
-
-**Milestone:** 90%+ of git's test suite passes.
-
-### Phase 9 — Platform Compat (~10K Zig)
-
-Linux, macOS, Windows. Zig's cross-compilation dramatically reduces this — C git's `compat/` is 34K lines; we expect ~10K.
-
-**Milestone:** All tests pass on Linux/macOS/Windows.
-
-## Prior Art
-
-| Project | Language | LOC | Compatibility |
-|---------|----------|-----|---------------|
-| [libgit2](https://github.com/libgit2/libgit2) | C | ~200K | Library only (no CLI) |
-| [gitoxide](https://github.com/GitoxideLabs/gitoxide) | Rust | ~250K | CLI + library, most complete alternative |
-| [go-git](https://github.com/go-git/go-git) | Go | ~80K | Library-focused |
-| [JGit](https://eclipse.dev/jgit/) | Java | ~300K | Eclipse ecosystem |
-| **zig-git** | **Zig** | **~187K est.** | **Full CLI compatibility** |
-
-## Risks
-
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Zig is pre-1.0 | Build breakage on upgrades | Pin Zig version; CI tests both stable and nightly |
-| libcurl/openssl dependency | Network layer complexity | Link C libraries initially; evaluate zig-http later |
-| Wire protocol compatibility | Broken fetch/push | Run existing shell test suite against zig-git binary |
-| Scale (187K lines) | Stalls after MVP | Phase 6 = MVP; open to contributors after that |
+- **Network:** `fetch`/`push` work with local paths only. HTTP/SSH transport infrastructure exists but is not battle-tested against GitHub/GitLab
+- **Merge:** Three-way merge works for common cases. Complex conflicts (criss-cross merges, rename conflicts) may not resolve identically to git
+- **Performance:** Not yet benchmarked or optimized. No parallel pack decompression
+- **Platform:** Tested on macOS (ARM64). Linux should work. Windows untested
+- **Interactive:** `rebase -i`, `add -p` have basic implementations but lack full terminal interaction
 
 ## Building
 
-> **Note:** This project is in the planning stage. No Zig code exists yet.
-
 ```bash
-# When ready:
+# Build
 zig build
+
+# Run
+./zig-out/bin/zig-git <command>
+
+# Run tests
 zig build test
+
+# Build optimized
+zig build -Doptimize=ReleaseFast
 ```
+
+## Project Structure
+
+- `src/` — All 123 Zig source files (57,904 lines)
+- `build.zig` — Build configuration
+- `GIT_ZIG_ROADMAP.md` — Detailed migration roadmap with per-file LOC analysis
 
 ## License
 
-TBD — likely GPL-2.0 (matching upstream git) or MIT.
+MIT
 
 ## Detailed Roadmap
 
-See [GIT_ZIG_ROADMAP.md](./GIT_ZIG_ROADMAP.md) for the full LOC-based analysis with per-file breakdowns.
+See [GIT_ZIG_ROADMAP.md](./GIT_ZIG_ROADMAP.md) for the full LOC-based analysis of git/git and the original migration plan.
