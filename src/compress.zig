@@ -13,6 +13,7 @@ pub const Error = error{
 };
 
 pub fn zlibInflate(allocator: std.mem.Allocator, input: []const u8) Error![]u8 {
+    if (input.len > std.math.maxInt(c_uint)) return error.ZlibBufError;
     var stream: c.z_stream = std.mem.zeroes(c.z_stream);
     stream.next_in = @constCast(input.ptr);
     stream.avail_in = @intCast(input.len);
@@ -45,6 +46,8 @@ pub fn zlibInflate(allocator: std.mem.Allocator, input: []const u8) Error![]u8 {
 /// Inflate with a pre-allocated output buffer (avoids ArrayList growth overhead).
 /// Used when the decompressed size is known in advance (e.g., from pack object headers).
 pub fn zlibInflateKnownSize(allocator: std.mem.Allocator, input: []const u8, expected_size: usize) Error![]u8 {
+    if (input.len > std.math.maxInt(c_uint)) return error.ZlibBufError;
+    if (expected_size > std.math.maxInt(c_uint)) return error.ZlibBufError;
     var stream: c.z_stream = std.mem.zeroes(c.z_stream);
     stream.next_in = @constCast(input.ptr);
     stream.avail_in = @intCast(input.len);
@@ -82,6 +85,8 @@ pub fn zlibInflateKnownSize(allocator: std.mem.Allocator, input: []const u8, exp
 /// Returns the number of compressed bytes consumed from input.
 /// Useful for pack file reading where we need to know where the compressed data ends.
 pub fn zlibInflateWithConsumed(allocator: std.mem.Allocator, input: []const u8, expected_size: usize) Error!struct { data: []u8, consumed: usize } {
+    if (input.len > std.math.maxInt(c_uint)) return error.ZlibBufError;
+    if (expected_size > std.math.maxInt(c_uint)) return error.ZlibBufError;
     var stream: c.z_stream = std.mem.zeroes(c.z_stream);
     stream.next_in = @constCast(input.ptr);
     stream.avail_in = @intCast(input.len);
@@ -116,6 +121,7 @@ pub fn zlibInflateWithConsumed(allocator: std.mem.Allocator, input: []const u8, 
 }
 
 pub fn zlibDeflate(allocator: std.mem.Allocator, input: []const u8) Error![]u8 {
+    if (input.len > std.math.maxInt(c_uint)) return error.ZlibBufError;
     var stream: c.z_stream = std.mem.zeroes(c.z_stream);
     stream.next_in = @constCast(input.ptr);
     stream.avail_in = @intCast(input.len);

@@ -3,8 +3,6 @@ const types = @import("types.zig");
 const pkt_line = @import("pkt_line.zig");
 const capabilities = @import("capabilities.zig");
 const transport_mod = @import("transport.zig");
-const url_mod = @import("url.zig");
-const upload_pack = @import("upload_pack.zig");
 
 /// Smart HTTP transport for git clone/fetch/push.
 ///
@@ -236,8 +234,6 @@ pub fn fetchPackHttp(
 
     const use_side_band = server_caps.has("side-band-64k");
     const use_ofs_delta = server_caps.has("ofs-delta");
-    const use_thin_pack = server_caps.has("thin-pack");
-    _ = use_thin_pack;
 
     // Build the request body
     var request = std.array_list.Managed(u8).init(allocator);
@@ -419,7 +415,7 @@ pub fn extractPackFromResponse(
         return result;
     }
 
-    pack_buf.deinit();
+    // Let errdefer handle cleanup on error return
     return error.NoPackData;
 }
 

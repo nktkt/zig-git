@@ -32,31 +32,38 @@ pub fn applyDelta(allocator: std.mem.Allocator, base: []const u8, delta: []const
             var copy_size: usize = 0;
 
             if (cmd & 0x01 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_offset = delta[pos];
                 pos += 1;
             }
             if (cmd & 0x02 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_offset |= @as(usize, delta[pos]) << 8;
                 pos += 1;
             }
             if (cmd & 0x04 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_offset |= @as(usize, delta[pos]) << 16;
                 pos += 1;
             }
             if (cmd & 0x08 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_offset |= @as(usize, delta[pos]) << 24;
                 pos += 1;
             }
 
             if (cmd & 0x10 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_size = delta[pos];
                 pos += 1;
             }
             if (cmd & 0x20 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_size |= @as(usize, delta[pos]) << 8;
                 pos += 1;
             }
             if (cmd & 0x40 != 0) {
+                if (pos >= delta.len) return error.DeltaDataTruncated;
                 copy_size |= @as(usize, delta[pos]) << 16;
                 pos += 1;
             }
@@ -90,13 +97,15 @@ pub fn applyDelta(allocator: std.mem.Allocator, base: []const u8, delta: []const
 
 fn readVarSize(data: []const u8, pos: *usize) usize {
     var result: usize = 0;
-    var shift: u6 = 0;
+    var shift: u7 = 0;
     while (pos.* < data.len) {
         const byte = data[pos.*];
         pos.* += 1;
-        result |= @as(usize, byte & 0x7f) << shift;
+        if (shift < @bitSizeOf(usize)) {
+            result |= @as(usize, byte & 0x7f) << @intCast(shift);
+        }
         if (byte & 0x80 == 0) break;
-        shift += 7;
+        shift +|= 7; // saturating add to avoid overflow
     }
     return result;
 }

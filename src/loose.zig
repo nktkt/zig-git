@@ -21,17 +21,18 @@ pub fn readLooseObject(allocator: std.mem.Allocator, git_dir: []const u8, oid: *
     defer file.close();
 
     const stat = try file.stat();
-    const compressed = try allocator.alloc(u8, stat.size);
+    if (stat.size > 128 * 1024 * 1024) return error.ObjectReadFailed; // Sanity limit
+    const compressed = try allocator.alloc(u8, @intCast(stat.size));
     defer allocator.free(compressed);
     const bytes_read = try file.readAll(compressed);
 
     const raw = compress.zlibInflate(allocator, compressed[0..bytes_read]) catch return error.ObjectDecompressFailed;
-    errdefer allocator.free(raw);
+    defer allocator.free(raw);
 
     return parseObjectContent(allocator, raw);
 }
 
-fn parseObjectContent(allocator: std.mem.Allocator, raw: []u8) !types.Object {
+fn parseObjectContent(allocator: std.mem.Allocator, raw: []const u8) !types.Object {
     // Format: "TYPE SIZE\0CONTENT"
     const space_pos = std.mem.indexOfScalar(u8, raw, ' ') orelse return error.InvalidObjectFormat;
     const null_pos = std.mem.indexOfScalar(u8, raw, 0) orelse return error.InvalidObjectFormat;
@@ -44,7 +45,6 @@ fn parseObjectContent(allocator: std.mem.Allocator, raw: []u8) !types.Object {
     const content = raw[null_pos + 1 ..];
     const data = try allocator.alloc(u8, content.len);
     @memcpy(data, content);
-    allocator.free(raw);
 
     return types.Object{
         .obj_type = obj_type,
@@ -72,7 +72,8 @@ pub fn writeLooseObject(allocator: std.mem.Allocator, git_dir: []const u8, obj_t
     const oid = types.ObjectId{ .bytes = digest };
 
     // Compress header + content
-    var raw = try allocator.alloc(u8, header.len + data.len);
+    const total_len = std.math.add(usize, header.len, data.len) catch return error.ObjectReadFailed;
+    var raw = try allocator.alloc(u8, total_len);
     defer allocator.free(raw);
     @memcpy(raw[0..header.len], header);
     @memcpy(raw[header.len..], data);

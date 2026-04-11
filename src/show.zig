@@ -310,6 +310,14 @@ fn formatTimestampBuf(timestamp: i64, timezone: []const u8) [64]u8 {
 
     const adjusted = timestamp + tz_offset_minutes * 60;
 
+    // Guard against negative timestamps
+    if (adjusted < 0) {
+        var stream = std.io.fixedBufferStream(&result);
+        const writer = stream.writer();
+        writer.print("Thu Jan 01 00:00:00 1970 {s}", .{timezone}) catch {};
+        return result;
+    }
+
     const epoch_days = @divFloor(adjusted, 86400);
     const day_seconds = @mod(adjusted, 86400);
     const hours: u8 = @intCast(@divFloor(day_seconds, 3600));
@@ -330,7 +338,8 @@ fn formatTimestampBuf(timestamp: i64, timezone: []const u8) [64]u8 {
     const month: u8 = @intCast(m_raw);
     const day_val: u8 = @intCast(d);
 
-    const dow_idx: usize = @intCast(@mod(epoch_days + 4, 7));
+    const raw_dow = @mod(epoch_days + 4, 7);
+    const dow_idx: usize = if (raw_dow >= 0) @intCast(raw_dow) else @intCast(raw_dow + 7);
     const dow_names = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     const mon_names = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 

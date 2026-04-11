@@ -29,7 +29,7 @@ pub const RefDiscoveryResult = struct {
 
     pub fn deinit(self: *RefDiscoveryResult) void {
         for (self.refs) |*r| {
-            self.allocator.free(@constCast(r.name));
+            self.allocator.free(r.name);
         }
         self.allocator.free(self.refs);
         if (self.capabilities_raw) |c| self.allocator.free(c);
@@ -396,14 +396,14 @@ fn concatPath(buf: []u8, a: []const u8, b: []const u8) []const u8 {
 }
 
 fn isDirectory(path: []const u8) bool {
-    const dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
     return true;
 }
 
 fn isFile(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    @constCast(&file).close();
+    var file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    file.close();
     return true;
 }
 

@@ -134,19 +134,23 @@ fn pushAllRefs(
     walker: *CommitWalker,
 ) !void {
     // Branches
-    const branches = ref_mod.listRefs(allocator, repo.git_dir, "refs/heads/") catch &[_]ref_mod.RefEntry{};
-    defer ref_mod.freeRefEntries(allocator, @constCast(branches));
+    const branches = ref_mod.listRefs(allocator, repo.git_dir, "refs/heads/") catch null;
+    defer if (branches) |b| ref_mod.freeRefEntries(allocator, @constCast(b));
 
-    for (branches) |entry| {
-        try walker.push(entry.oid);
+    if (branches) |b| {
+        for (b) |entry| {
+            try walker.push(entry.oid);
+        }
     }
 
     // Tags
-    const tags = ref_mod.listRefs(allocator, repo.git_dir, "refs/tags/") catch &[_]ref_mod.RefEntry{};
-    defer ref_mod.freeRefEntries(allocator, @constCast(tags));
+    const tags = ref_mod.listRefs(allocator, repo.git_dir, "refs/tags/") catch null;
+    defer if (tags) |t| ref_mod.freeRefEntries(allocator, @constCast(t));
 
-    for (tags) |entry| {
-        try walker.push(entry.oid);
+    if (tags) |t| {
+        for (t) |entry| {
+            try walker.push(entry.oid);
+        }
     }
 }
 
@@ -206,22 +210,26 @@ fn buildDecoMap(allocator: std.mem.Allocator, repo: *repository.Repository) !Dec
     var dmap = DecoMap.init(allocator);
     errdefer dmap.deinit();
 
-    const branches = ref_mod.listRefs(allocator, repo.git_dir, "refs/heads/") catch &[_]ref_mod.RefEntry{};
-    defer ref_mod.freeRefEntries(allocator, @constCast(branches));
-    for (branches) |entry| {
-        const prefix = "refs/heads/";
-        const short = if (std.mem.startsWith(u8, entry.name, prefix)) entry.name[prefix.len..] else entry.name;
-        try dmap.addEntry(&entry.oid, short);
+    const branches = ref_mod.listRefs(allocator, repo.git_dir, "refs/heads/") catch null;
+    defer if (branches) |b| ref_mod.freeRefEntries(allocator, @constCast(b));
+    if (branches) |b_entries| {
+        for (b_entries) |entry| {
+            const prefix = "refs/heads/";
+            const short = if (std.mem.startsWith(u8, entry.name, prefix)) entry.name[prefix.len..] else entry.name;
+            try dmap.addEntry(&entry.oid, short);
+        }
     }
 
-    const tags = ref_mod.listRefs(allocator, repo.git_dir, "refs/tags/") catch &[_]ref_mod.RefEntry{};
-    defer ref_mod.freeRefEntries(allocator, @constCast(tags));
-    for (tags) |entry| {
-        const prefix = "refs/tags/";
-        const short = if (std.mem.startsWith(u8, entry.name, prefix)) entry.name[prefix.len..] else entry.name;
-        var tag_buf: [280]u8 = undefined;
-        const tag_name = std.fmt.bufPrint(&tag_buf, "tag: {s}", .{short}) catch short;
-        try dmap.addEntry(&entry.oid, tag_name);
+    const tags = ref_mod.listRefs(allocator, repo.git_dir, "refs/tags/") catch null;
+    defer if (tags) |t| ref_mod.freeRefEntries(allocator, @constCast(t));
+    if (tags) |t_entries| {
+        for (t_entries) |entry| {
+            const prefix = "refs/tags/";
+            const short = if (std.mem.startsWith(u8, entry.name, prefix)) entry.name[prefix.len..] else entry.name;
+            var tag_buf: [280]u8 = undefined;
+            const tag_name = std.fmt.bufPrint(&tag_buf, "tag: {s}", .{short}) catch short;
+            try dmap.addEntry(&entry.oid, tag_name);
+        }
     }
 
     return dmap;
@@ -680,6 +688,14 @@ fn formatTimestamp(timestamp: i64, timezone: []const u8) [64]u8 {
     // Apply timezone offset
     const adjusted = timestamp + tz_offset_minutes * 60;
 
+    // Guard against negative timestamps
+    if (adjusted < 0) {
+        var stream = std.io.fixedBufferStream(&result);
+        const writer = stream.writer();
+        writer.print("Thu Jan 01 00:00:00 1970 {s}", .{timezone}) catch {};
+        return result;
+    }
+
     // Convert to date components
     const epoch_days = @divFloor(adjusted, 86400);
     const day_seconds = @mod(adjusted, 86400);
@@ -702,8 +718,9 @@ fn formatTimestamp(timestamp: i64, timezone: []const u8) [64]u8 {
     const month: u8 = @intCast(m_raw);
     const day: u8 = @intCast(d);
 
-    // Day of week
-    const dow_idx: usize = @intCast(@mod(epoch_days + 4, 7)); // 0=Sunday (epoch was Thursday, +4)
+    // Day of week (epoch was Thursday; +4 shifts so 0=Sunday)
+    const raw_dow = @mod(epoch_days + 4, 7);
+    const dow_idx: usize = if (raw_dow >= 0) @intCast(raw_dow) else @intCast(raw_dow + 7);
     const dow_names = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
     const mon_names = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
 

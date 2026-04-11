@@ -2,7 +2,6 @@ const std = @import("std");
 const types = @import("types.zig");
 const pkt_line = @import("pkt_line.zig");
 const capabilities = @import("capabilities.zig");
-const transport_mod = @import("transport.zig");
 const url_mod = @import("url.zig");
 const smart_http = @import("smart_http.zig");
 
@@ -69,6 +68,8 @@ pub fn discoverRefsSsh(
     try argv.append(host_buf[0..hpos]);
 
     // Remote command: git-upload-pack '/path'
+    // Sanitize the path to prevent command injection via single quotes
+    const path = parsed.path;
     var cmd_buf: [4096]u8 = undefined;
     var cpos: usize = 0;
     @memcpy(cmd_buf[cpos..][0..service.len], service);
@@ -79,13 +80,30 @@ pub fn discoverRefsSsh(
     cpos += 1;
 
     // For SCP-style, path doesn't start with /
-    const path = parsed.path;
     if (path.len > 0 and path[0] != '/') {
         cmd_buf[cpos] = '/';
         cpos += 1;
     }
-    @memcpy(cmd_buf[cpos..][0..path.len], path);
-    cpos += path.len;
+    // Escape single quotes in path to prevent injection
+    for (path) |ch| {
+        if (ch == '\'') {
+            // End quote, escaped quote, start quote: '\''
+            if (cpos + 4 > cmd_buf.len) return error.BufferTooSmall;
+            cmd_buf[cpos] = '\'';
+            cpos += 1;
+            cmd_buf[cpos] = '\\';
+            cpos += 1;
+            cmd_buf[cpos] = '\'';
+            cpos += 1;
+            cmd_buf[cpos] = '\'';
+            cpos += 1;
+        } else {
+            if (cpos + 1 > cmd_buf.len) return error.BufferTooSmall;
+            cmd_buf[cpos] = ch;
+            cpos += 1;
+        }
+    }
+    if (cpos + 1 > cmd_buf.len) return error.BufferTooSmall;
     cmd_buf[cpos] = '\'';
     cpos += 1;
     try argv.append(cmd_buf[0..cpos]);
@@ -106,14 +124,27 @@ pub fn discoverRefsSsh(
 
     // Read stdout
     const stdout_data = try readAllPipe(allocator, child.stdout.?);
-    defer allocator.free(stdout_data);
+    errdefer allocator.free(stdout_data);
 
     // Read stderr
     const stderr_data = try readAllPipe(allocator, child.stderr.?);
     defer allocator.free(stderr_data);
 
     const term = try child.wait();
-    _ = term;
+
+    // Check exit code for SSH failures
+    const exit_code: u8 = switch (term) {
+        .Exited => |code| code,
+        else => 1,
+    };
+    if (exit_code != 0 and stdout_data.len == 0) {
+        if (stderr_data.len > 0) {
+            stderr_file.writeAll(stderr_data) catch {};
+        }
+        allocator.free(stdout_data);
+        return error.SshFailed;
+    }
+    defer allocator.free(stdout_data);
 
     if (stdout_data.len == 0) {
         if (stderr_data.len > 0) {
@@ -273,8 +304,25 @@ pub fn fetchPackSsh(
         cmd_buf[cpos] = '/';
         cpos += 1;
     }
-    @memcpy(cmd_buf[cpos..][0..path.len], path);
-    cpos += path.len;
+    // Escape single quotes in path to prevent command injection
+    for (path) |ch| {
+        if (ch == '\'') {
+            if (cpos + 4 > cmd_buf.len) return error.BufferTooSmall;
+            cmd_buf[cpos] = '\'';
+            cpos += 1;
+            cmd_buf[cpos] = '\\';
+            cpos += 1;
+            cmd_buf[cpos] = '\'';
+            cpos += 1;
+            cmd_buf[cpos] = '\'';
+            cpos += 1;
+        } else {
+            if (cpos + 1 > cmd_buf.len) return error.BufferTooSmall;
+            cmd_buf[cpos] = ch;
+            cpos += 1;
+        }
+    }
+    if (cpos + 1 > cmd_buf.len) return error.BufferTooSmall;
     cmd_buf[cpos] = '\'';
     cpos += 1;
     try argv.append(cmd_buf[0..cpos]);
@@ -339,7 +387,17 @@ pub fn fetchPackSsh(
     defer allocator.free(stderr_data);
 
     const term = try child.wait();
-    _ = term;
+    // Log SSH stderr on failure but don't fail hard -- pack data may still be valid
+    const exit_code: u8 = switch (term) {
+        .Exited => |code| code,
+        else => 1,
+    };
+    if (exit_code != 0 and response.len == 0) {
+        if (stderr_data.len > 0) {
+            stderr_file.writeAll(stderr_data) catch {};
+        }
+        return error.SshFailed;
+    }
 
     // Extract pack data
     return smart_http.extractPackFromResponse(allocator, response, use_side_band) catch |err| {

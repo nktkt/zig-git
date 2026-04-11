@@ -7,12 +7,10 @@ const loose = @import("loose.zig");
 const object_walk = @import("object_walk.zig");
 const url_mod = @import("url.zig");
 const smart_http = @import("smart_http.zig");
-const smart_ssh = @import("smart_ssh.zig");
 const transport_mod = @import("transport.zig");
 const pack_writer = @import("pack_writer.zig");
 const config_mod = @import("config.zig");
 
-const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
 /// Push a branch to a remote repository.
@@ -181,7 +179,6 @@ pub fn push(
     defer allocator.free(missing);
 
     // Copy missing objects to remote
-    var objects_pushed: u32 = 0;
     for (missing) |oid| {
         var obj = our_repo.readObject(allocator, &oid) catch continue;
         defer obj.deinit();
@@ -190,7 +187,6 @@ pub fn push(
             error.PathAlreadyExists => continue,
             else => continue,
         };
-        objects_pushed += 1;
     }
 
     // Update the remote's branch ref
@@ -646,14 +642,14 @@ fn findGitDir(path: []const u8, buf: []u8) ?[]const u8 {
 }
 
 fn isDirectory(path: []const u8) bool {
-    const dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
     return true;
 }
 
 fn isFile(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    @constCast(&file).close();
+    var file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    file.close();
     return true;
 }
 

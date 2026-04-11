@@ -444,8 +444,8 @@ fn autoStageModified(
 
         // Quick size check.
         const current_size: u32 = @intCast(stat.size);
-        const mtime_s: u32 = @intCast(@divFloor(stat.mtime, 1_000_000_000));
-        const mtime_ns: u32 = @intCast(@mod(stat.mtime, 1_000_000_000));
+        const mtime_s: u32 = if (stat.mtime >= 0) @intCast(@as(u64, @intCast(@divFloor(stat.mtime, 1_000_000_000)))) else 0;
+        const mtime_ns: u32 = if (stat.mtime >= 0) @intCast(@as(u64, @intCast(@mod(stat.mtime, 1_000_000_000)))) else 0;
 
         if (current_size == entry.file_size and
             mtime_s == entry.mtime_s and
@@ -558,7 +558,7 @@ fn writeHeadOid(git_dir: []const u8, oid: types.ObjectId) !void {
     @memcpy(content_buf[0..types.OID_HEX_LEN], &hex);
     content_buf[types.OID_HEX_LEN] = '\n';
 
-    const file = try std.fs.createFileAbsolute(head_path, .{});
+    const file = try std.fs.createFileAbsolute(head_path, .{ .truncate = true });
     defer file.close();
     try file.writeAll(&content_buf);
 }

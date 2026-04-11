@@ -22,11 +22,11 @@ pub const PackIndex = struct {
         if (stat.size < OID_TABLE_OFFSET) return error.PackIndexTooSmall;
 
         const data = try std.posix.mmap(null, stat.size, std.posix.PROT.READ, .{ .TYPE = .PRIVATE }, file.handle, 0);
+        errdefer std.posix.munmap(@constCast(@alignCast(data)));
 
         const magic = readU32(data, 0);
         const version = readU32(data, 4);
         if (magic != IDX_MAGIC or version != IDX_VERSION) {
-            std.posix.munmap(data);
             return error.InvalidPackIndex;
         }
 
@@ -81,20 +81,23 @@ pub const PackIndex = struct {
         const offset_table_start = OID_TABLE_OFFSET + n * types.OID_RAW_LEN + n * 4;
         const offset_entry = offset_table_start + @as(usize, index) * 4;
 
+        if (offset_entry + 4 > self.data_len) return null;
         const raw_offset = readU32(self.data, offset_entry);
 
         if (raw_offset & 0x80000000 != 0) {
             const large_idx = raw_offset & 0x7fffffff;
             const large_table_start = offset_table_start + n * 4;
             const large_entry = large_table_start + @as(usize, large_idx) * 8;
+            if (large_entry + 8 > self.data_len) return null;
             return readU64(self.data, large_entry);
         }
 
         return @as(u64, raw_offset);
     }
 
-    pub fn getOid(self: *const PackIndex, index: u32) types.ObjectId {
+    pub fn getOid(self: *const PackIndex, index: u32) ?types.ObjectId {
         const oid_offset = OID_TABLE_OFFSET + @as(usize, index) * types.OID_RAW_LEN;
+        if (oid_offset + types.OID_RAW_LEN > self.data_len) return null;
         var oid: types.ObjectId = undefined;
         @memcpy(&oid.bytes, self.data[oid_offset..][0..types.OID_RAW_LEN]);
         return oid;
@@ -106,7 +109,7 @@ pub const PackIndex = struct {
 
         pub fn next(self: *Iterator) ?struct { oid: types.ObjectId, offset: u64 } {
             if (self.current >= self.pack_index.num_objects) return null;
-            const oid = self.pack_index.getOid(self.current);
+            const oid = self.pack_index.getOid(self.current) orelse return null;
             const offset = self.pack_index.getOffset(self.current) orelse return null;
             self.current += 1;
             return .{ .oid = oid, .offset = offset };

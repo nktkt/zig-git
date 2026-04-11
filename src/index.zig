@@ -63,13 +63,27 @@ pub const Index = struct {
 
         const stat = try file.stat();
         if (stat.size < 12) return error.InvalidIndex;
-        const data = try allocator.alloc(u8, stat.size);
-        errdefer allocator.free(data);
-        const n = try file.readAll(data);
-        if (n < 12) return error.InvalidIndex;
-        const buf = data[0..n];
+        const raw_data = try allocator.alloc(u8, @intCast(stat.size));
+        const n = try file.readAll(raw_data);
+        if (n < 12) {
+            allocator.free(raw_data);
+            return error.InvalidIndex;
+        }
 
-        return parseIndex(allocator, buf);
+        // If we read fewer bytes than allocated, reallocate to the exact size
+        // so that raw_data in parseIndex can be freed correctly.
+        const data = if (n < raw_data.len) blk: {
+            const exact = allocator.alloc(u8, n) catch {
+                allocator.free(raw_data);
+                return error.OutOfMemory;
+            };
+            @memcpy(exact, raw_data[0..n]);
+            allocator.free(raw_data);
+            break :blk exact;
+        } else raw_data;
+        errdefer allocator.free(data);
+
+        return parseIndex(allocator, data);
     }
 
     fn parseIndex(allocator: std.mem.Allocator, data: []u8) !Index {
@@ -183,12 +197,16 @@ pub const Index = struct {
         var header: [12]u8 = undefined;
         @memcpy(header[0..4], "DIRC");
         writeU32(header[4..8], self.version);
+        if (self.entries.items.len > std.math.maxInt(u32)) return error.TooManyEntries;
         writeU32(header[8..12], @intCast(self.entries.items.len));
         try file.writeAll(&header);
         hasher.update(&header);
 
         // Entries
         for (self.entries.items) |*entry| {
+            // 62 bytes fixed fields + name + NUL + up to 7 bytes padding
+            const max_entry_size = 62 + entry.name.len + 1 + 7;
+            if (max_entry_size > 4096) return error.NameTooLong;
             var entry_buf: [4096]u8 = undefined;
             var pos: usize = 0;
 
@@ -222,8 +240,6 @@ pub const Index = struct {
             pos += 2;
 
             // Name + NUL + padding to 8-byte boundary
-            const entry_start_offset: usize = 0; // relative to start of entry in buffer
-            _ = entry_start_offset;
             @memcpy(entry_buf[pos..][0..entry.name.len], entry.name);
             pos += entry.name.len;
             entry_buf[pos] = 0;

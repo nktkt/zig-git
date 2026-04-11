@@ -1,14 +1,13 @@
 const std = @import("std");
 const config_mod = @import("config.zig");
-const ref_mod = @import("ref.zig");
-const index_mod = @import("index.zig");
 
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
 /// Determine which editor to use.
-/// Priority: core.editor config -> GIT_EDITOR env -> VISUAL env -> EDITOR env -> "vi"
+/// Returns a static string or an allocator-owned copy. Caller should treat
+/// the result as potentially allocated; use `freeEditorCommand` to free safely.
+/// Priority: core.editor config -> "vi"
 pub fn getEditorCommand(allocator: std.mem.Allocator, git_dir: []const u8) []const u8 {
-    // 1. Check core.editor from config
     var config_path_buf: [4096]u8 = undefined;
     const config_path = buildPath(&config_path_buf, git_dir, "/config");
     var cfg = config_mod.Config.loadFile(allocator, config_path) catch {
@@ -16,18 +15,29 @@ pub fn getEditorCommand(allocator: std.mem.Allocator, git_dir: []const u8) []con
     };
     defer cfg.deinit();
     if (cfg.get("core.editor")) |editor| {
-        if (editor.len > 0) return editor;
+        if (editor.len > 0) {
+            // Copy the value so it outlives cfg.deinit()
+            const copy = allocator.alloc(u8, editor.len) catch return "vi";
+            @memcpy(copy, editor);
+            return copy;
+        }
     }
 
-    // 2-4. We just default to "vi" since env values cannot outlive the scope
-    // In a real implementation, we'd allocate copies of the env values.
-    // For simplicity, default to "vi".
     return "vi";
+}
+
+/// Free an editor command returned by getEditorCommand if it was allocated.
+fn freeEditorCommand(allocator: std.mem.Allocator, cmd: []const u8) void {
+    // Static strings like "vi" point into read-only data; only free heap copies.
+    // We detect heap allocation by checking if the pointer is NOT from a comptime string.
+    if (std.mem.eql(u8, cmd, "vi") and cmd.ptr == "vi".ptr) return;
+    allocator.free(cmd);
 }
 
 /// Open a file in the editor and wait for it to exit.
 pub fn openEditor(allocator: std.mem.Allocator, git_dir: []const u8, file_path: []const u8) !void {
     const editor_cmd = getEditorCommand(allocator, git_dir);
+    defer freeEditorCommand(allocator, editor_cmd);
 
     // Spawn the editor process
     var child = std.process.Child.init(&[_][]const u8{ editor_cmd, file_path }, allocator);
@@ -144,7 +154,7 @@ pub fn editCommitMessage(
     }
 
     if (!has_content) {
-        result.deinit();
+        // errdefer will handle cleanup
         try stderr_file.writeAll("Aborting commit due to empty commit message.\n");
         return error.CommitAborted;
     }

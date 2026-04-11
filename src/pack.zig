@@ -65,8 +65,8 @@ pub const PackFile = struct {
     fn readObjectAtOffset(self: *PackFile, allocator: std.mem.Allocator, offset: u64, depth: u32) !types.Object {
         if (depth > MAX_DELTA_DEPTH) return error.DeltaChainTooDeep;
 
+        if (offset >= self.data_len) return error.PackFileTruncated;
         var pos: usize = @intCast(offset);
-        if (pos >= self.data_len) return error.PackFileTruncated;
 
         // Read type and size from variable-length header
         const first_byte = self.data[pos];
@@ -82,7 +82,8 @@ pub const PackFile = struct {
                 pos += 1;
                 size |= @as(u64, b & 0x7f) << shift;
                 if (b & 0x80 == 0) break;
-                shift = @min(shift + 7, 63);
+                const next_shift = @as(u7, shift) + 7;
+                shift = if (next_shift > 63) 63 else @intCast(next_shift);
             }
         }
 
@@ -91,6 +92,7 @@ pub const PackFile = struct {
         if (pack_type.isBase()) {
             const remaining = self.data[pos..self.data_len];
 
+            if (size > std.math.maxInt(usize)) return error.PackFileTruncated;
             const usize_size: usize = @intCast(size);
             const data = try compress.zlibInflateKnownSize(allocator, remaining, usize_size);
 
@@ -114,6 +116,7 @@ pub const PackFile = struct {
                     pos += 1;
                 }
 
+                if (delta_offset > offset) return error.PackFileTruncated;
                 const base_offset = offset - delta_offset;
 
                 const remaining = self.data[pos..self.data_len];

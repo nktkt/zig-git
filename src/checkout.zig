@@ -161,10 +161,12 @@ fn getCommitSubject(commit_data: []const u8) []const u8 {
 fn resolveToBranch(allocator: std.mem.Allocator, git_dir: []const u8, name: []const u8) ?[]const u8 {
     // Check if refs/heads/<name> exists
     var path_buf: [4096]u8 = undefined;
+    const suffix = "/refs/heads/";
+    const total_len = git_dir.len + suffix.len + name.len;
+    if (total_len > path_buf.len) return null;
     var pos: usize = 0;
     @memcpy(path_buf[pos..][0..git_dir.len], git_dir);
     pos += git_dir.len;
-    const suffix = "/refs/heads/";
     @memcpy(path_buf[pos..][0..suffix.len], suffix);
     pos += suffix.len;
     @memcpy(path_buf[pos..][0..name.len], name);
@@ -367,8 +369,12 @@ fn checkoutBranch(
     branch_name: []const u8,
 ) !void {
     // Resolve the target branch ref
-    var ref_buf: [256]u8 = undefined;
+    var ref_buf: [512]u8 = undefined;
     const ref_prefix = "refs/heads/";
+    if (ref_prefix.len + branch_name.len > ref_buf.len) {
+        try stderr_file.writeAll("error: branch name too long\n");
+        std.process.exit(1);
+    }
     @memcpy(ref_buf[0..ref_prefix.len], ref_prefix);
     @memcpy(ref_buf[ref_prefix.len..][0..branch_name.len], branch_name);
     const target_ref = ref_buf[0 .. ref_prefix.len + branch_name.len];
@@ -467,8 +473,12 @@ fn checkoutCreateBranch(
     };
 
     // Build ref name
-    var ref_buf: [256]u8 = undefined;
+    var ref_buf: [512]u8 = undefined;
     const ref_prefix = "refs/heads/";
+    if (ref_prefix.len + branch_name.len > ref_buf.len) {
+        try stderr_file.writeAll("fatal: branch name too long\n");
+        std.process.exit(128);
+    }
     @memcpy(ref_buf[0..ref_prefix.len], ref_prefix);
     @memcpy(ref_buf[ref_prefix.len..][0..branch_name.len], branch_name);
     const target_ref = ref_buf[0 .. ref_prefix.len + branch_name.len];

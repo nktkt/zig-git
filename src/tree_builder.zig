@@ -66,10 +66,7 @@ fn buildTreeRecursive(
             const dir_name = remaining[0..slash_pos];
 
             // Collect all entries that share this directory prefix.
-            const sub_prefix = buildSubPrefix(allocator, prefix, dir_name) catch {
-                i += 1;
-                continue;
-            };
+            const sub_prefix = try buildSubPrefix(allocator, prefix, dir_name);
             defer allocator.free(sub_prefix);
 
             // Find the range of entries sharing this subdirectory.
@@ -201,31 +198,7 @@ fn writeTreeObject(
     }
 
     // Write as a loose object with type "tree".
-    const oid = loose.writeLooseObject(allocator, git_dir, .tree, tree_data) catch |err| switch (err) {
-        error.PathAlreadyExists => {
-            // Object already exists — compute the OID and return it.
-            return computeTreeOid(tree_data);
-        },
-        else => return err,
-    };
-    return oid;
-}
-
-/// Compute the OID for a tree object without writing it.
-fn computeTreeOid(data: []const u8) types.ObjectId {
-    const hash = @import("hash.zig");
-    var header_buf: [64]u8 = undefined;
-    var hstream = std.io.fixedBufferStream(&header_buf);
-    const hwriter = hstream.writer();
-    hwriter.writeAll("tree ") catch unreachable;
-    hwriter.print("{d}", .{data.len}) catch unreachable;
-    hwriter.writeByte(0) catch unreachable;
-    const header = header_buf[0..hstream.pos];
-
-    var hasher = hash.Sha1.init(.{});
-    hasher.update(header);
-    hasher.update(data);
-    return types.ObjectId{ .bytes = hasher.finalResult() };
+    return loose.writeLooseObject(allocator, git_dir, .tree, tree_data);
 }
 
 /// Git tree entry sort order. Directories sort as if they have a trailing '/'.

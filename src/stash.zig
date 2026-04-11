@@ -259,7 +259,28 @@ fn createCommitObject(
     try commit_data.appendSlice(message);
     try commit_data.append('\n');
 
-    return loose.writeLooseObject(allocator, git_dir, .commit, commit_data.items);
+    return loose.writeLooseObject(allocator, git_dir, .commit, commit_data.items) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            return computeCommitOid(commit_data.items);
+        },
+        else => return err,
+    };
+}
+
+/// Compute the commit OID without writing.
+fn computeCommitOid(data: []const u8) types.ObjectId {
+    var header_buf: [64]u8 = undefined;
+    var hstream = std.io.fixedBufferStream(&header_buf);
+    const hwriter = hstream.writer();
+    hwriter.writeAll("commit ") catch unreachable;
+    hwriter.print("{d}", .{data.len}) catch unreachable;
+    hwriter.writeByte(0) catch unreachable;
+    const header = header_buf[0..hstream.pos];
+
+    var hasher = hash_mod.Sha1.init(.{});
+    hasher.update(header);
+    hasher.update(data);
+    return types.ObjectId{ .bytes = hasher.finalResult() };
 }
 
 /// Write a blob to the working tree.

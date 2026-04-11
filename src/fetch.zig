@@ -1,7 +1,6 @@
 const std = @import("std");
 const types = @import("types.zig");
 const repository = @import("repository.zig");
-const config_mod = @import("config.zig");
 const remote_mod = @import("remote.zig");
 const ref_mod = @import("ref.zig");
 const loose = @import("loose.zig");
@@ -12,7 +11,6 @@ const smart_ssh = @import("smart_ssh.zig");
 const pack_index_writer = @import("pack_index_writer.zig");
 const hash_mod = @import("hash.zig");
 
-const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
 /// Fetch from a remote repository.
@@ -73,8 +71,6 @@ fn fetchHttp(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8,
 
     var seen_wants = std.AutoHashMap([types.OID_RAW_LEN]u8, void).init(allocator);
     defer seen_wants.deinit();
-
-    var refs_updated: u32 = 0;
 
     for (discovery.refs) |ref| {
         if (std.mem.eql(u8, ref.name, "HEAD")) continue;
@@ -151,14 +147,14 @@ fn fetchHttp(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8,
 
             const old_oid = ref_mod.readRef(allocator, git_dir, tracking_ref) catch {
                 ref_mod.createRef(allocator, git_dir, tracking_ref, ref.oid, null) catch continue;
-                refs_updated += 1;
+
                 printRefUpdate(remote_name, branch_name, null, &ref.oid);
                 continue;
             };
 
             if (!old_oid.eql(&ref.oid)) {
                 ref_mod.createRef(allocator, git_dir, tracking_ref, ref.oid, null) catch continue;
-                refs_updated += 1;
+
                 printRefUpdate(remote_name, branch_name, &old_oid, &ref.oid);
             }
         }
@@ -198,9 +194,10 @@ fn fetchSsh(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8, 
         if (std.mem.startsWith(u8, ref.name, "refs/heads/") or
             std.mem.startsWith(u8, ref.name, "refs/tags/"))
         {
+            // tracking_buf must outlive the tracking_name slice
+            var tracking_buf: [512]u8 = undefined;
             const tracking_name = if (std.mem.startsWith(u8, ref.name, "refs/heads/")) blk: {
                 const branch_name = ref.name["refs/heads/".len..];
-                var tracking_buf: [512]u8 = undefined;
                 break :blk buildTrackingRefName(&tracking_buf, remote_name, branch_name);
             } else ref.name;
 
@@ -324,7 +321,6 @@ fn fetchLocal(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8
         }
     }
 
-    var objects_copied: u32 = 0;
     if (source_tips.items.len > 0) {
         const missing = object_walk.findMissingObjects(
             allocator,
@@ -334,7 +330,6 @@ fn fetchLocal(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8
             our_have.items,
         ) catch {
             try copyObjectsForRefs(allocator, &source_repo, git_dir, source_refs);
-            objects_copied = @intCast(source_refs.len);
             try updateTrackingRefs(allocator, git_dir, remote_name, source_refs);
             return;
         };
@@ -348,11 +343,9 @@ fn fetchLocal(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8
                 error.PathAlreadyExists => continue,
                 else => continue,
             };
-            objects_copied += 1;
         }
     }
 
-    var refs_updated: u32 = 0;
     for (source_refs) |entry| {
         if (std.mem.startsWith(u8, entry.name, "refs/heads/")) {
             const branch_name = entry.name["refs/heads/".len..];
@@ -361,14 +354,14 @@ fn fetchLocal(allocator: std.mem.Allocator, git_dir: []const u8, url: []const u8
 
             const current_oid = ref_mod.readRef(allocator, git_dir, tracking_ref) catch {
                 ref_mod.createRef(allocator, git_dir, tracking_ref, entry.oid, null) catch continue;
-                refs_updated += 1;
+
                 printRefUpdate(remote_name, branch_name, null, &entry.oid);
                 continue;
             };
 
             if (!current_oid.eql(&entry.oid)) {
                 ref_mod.createRef(allocator, git_dir, tracking_ref, entry.oid, null) catch continue;
-                refs_updated += 1;
+
                 printRefUpdate(remote_name, branch_name, &current_oid, &entry.oid);
             }
         }
@@ -574,13 +567,13 @@ fn findGitDir(path: []const u8, buf: []u8) ?[]const u8 {
 }
 
 fn isDirectory(path: []const u8) bool {
-    const dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
     return true;
 }
 
 fn isFile(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    @constCast(&file).close();
+    var file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    file.close();
     return true;
 }

@@ -125,19 +125,23 @@ pub const Config = struct {
                 }
 
                 const owned_section = try allocator.alloc(u8, section.len);
+                errdefer allocator.free(owned_section);
                 @memcpy(owned_section, section);
 
                 var owned_subsection: ?[]u8 = null;
+                errdefer if (owned_subsection) |oss| allocator.free(oss);
                 if (current_subsection) |ss| {
                     owned_subsection = try allocator.alloc(u8, ss.len);
                     @memcpy(owned_subsection.?, ss);
                 }
 
                 const owned_key = try allocator.alloc(u8, key_str.len);
+                errdefer allocator.free(owned_key);
                 @memcpy(owned_key, key_str);
                 toLowerInPlace(owned_key);
 
                 const owned_value = try allocator.alloc(u8, val_str.len);
+                errdefer allocator.free(owned_value);
                 @memcpy(owned_value, val_str);
 
                 try cfg.entries.append(.{
@@ -167,7 +171,7 @@ pub const Config = struct {
             i -= 1;
             const entry = &self.entries.items[i];
             if (eqlLower(entry.section, parsed.section) and
-                eqlSubsection(entry.subsection, parsed.subsection) and
+                eqlOptional(entry.subsection, parsed.subsection) and
                 eqlLower(entry.key, parsed.key))
             {
                 return entry.value;
@@ -183,33 +187,38 @@ pub const Config = struct {
         // Search for existing entry
         for (self.entries.items) |*entry| {
             if (eqlLower(entry.section, parsed.section) and
-                eqlSubsection(entry.subsection, parsed.subsection) and
+                eqlOptional(entry.subsection, parsed.subsection) and
                 eqlLower(entry.key, parsed.key))
             {
-                // Update value
+                // Update value - allocate new before freeing old to avoid dangling pointer on OOM
+                const new_value = try self.allocator.alloc(u8, value.len);
+                @memcpy(new_value, value);
                 self.allocator.free(entry.value);
-                entry.value = try self.allocator.alloc(u8, value.len);
-                @memcpy(entry.value, value);
+                entry.value = new_value;
                 return;
             }
         }
 
         // Add new entry
         const owned_section = try self.allocator.alloc(u8, parsed.section.len);
+        errdefer self.allocator.free(owned_section);
         @memcpy(owned_section, parsed.section);
         toLowerInPlace(owned_section);
 
         var owned_subsection: ?[]u8 = null;
+        errdefer if (owned_subsection) |oss| self.allocator.free(oss);
         if (parsed.subsection) |ss| {
             owned_subsection = try self.allocator.alloc(u8, ss.len);
             @memcpy(owned_subsection.?, ss);
         }
 
         const owned_key = try self.allocator.alloc(u8, parsed.key.len);
+        errdefer self.allocator.free(owned_key);
         @memcpy(owned_key, parsed.key);
         toLowerInPlace(owned_key);
 
         const owned_value = try self.allocator.alloc(u8, value.len);
+        errdefer self.allocator.free(owned_value);
         @memcpy(owned_value, value);
 
         try self.entries.append(.{
@@ -339,12 +348,6 @@ fn eqlLower(a: []const u8, b: []const u8) bool {
         if (la != lb) return false;
     }
     return true;
-}
-
-fn eqlSubsection(a: ?[]const u8, b: ?[]const u8) bool {
-    if (a == null and b == null) return true;
-    if (a == null or b == null) return false;
-    return std.mem.eql(u8, a.?, b.?);
 }
 
 fn eqlOptional(a: ?[]const u8, b: ?[]const u8) bool {

@@ -151,7 +151,11 @@ fn createBranch(repo: *repository.Repository, allocator: std.mem.Allocator, name
 
     // Check if branch already exists
     const ref_name_prefix = "refs/heads/";
-    var ref_name_buf: [256]u8 = undefined;
+    var ref_name_buf: [512]u8 = undefined;
+    if (ref_name_prefix.len + name.len > ref_name_buf.len) {
+        try stderr_file.writeAll("fatal: branch name too long\n");
+        std.process.exit(128);
+    }
     @memcpy(ref_name_buf[0..ref_name_prefix.len], ref_name_prefix);
     @memcpy(ref_name_buf[ref_name_prefix.len..][0..name.len], name);
     const ref_name = ref_name_buf[0 .. ref_name_prefix.len + name.len];
@@ -184,7 +188,11 @@ fn deleteBranch(repo: *repository.Repository, allocator: std.mem.Allocator, name
     defer if (head_ref) |h| allocator.free(h);
 
     const ref_name_prefix = "refs/heads/";
-    var ref_name_buf: [256]u8 = undefined;
+    var ref_name_buf: [512]u8 = undefined;
+    if (ref_name_prefix.len + name.len > ref_name_buf.len) {
+        try stderr_file.writeAll("error: branch name too long\n");
+        std.process.exit(1);
+    }
     @memcpy(ref_name_buf[0..ref_name_prefix.len], ref_name_prefix);
     @memcpy(ref_name_buf[ref_name_prefix.len..][0..name.len], name);
     const ref_name = ref_name_buf[0 .. ref_name_prefix.len + name.len];

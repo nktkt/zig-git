@@ -281,9 +281,7 @@ pub fn readSideBandData(
                     .pack_data => try pack_data.appendSlice(sb.data),
                     .progress => try progress.appendSlice(sb.data),
                     .err => {
-                        // Server error: collect it
-                        progress.deinit();
-                        pack_data.deinit();
+                        // Server error -- errdefer will clean up pack_data and progress
                         return PktLineError.ServerError;
                     },
                 }

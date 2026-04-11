@@ -203,7 +203,7 @@ pub fn runRemote(allocator: std.mem.Allocator, git_dir: []const u8, args: []cons
         // List remotes (names only)
         const names = try listRemotes(allocator, git_dir);
         defer {
-            for (names) |n| allocator.free(@constCast(n));
+            for (names) |n| allocator.free(n);
             allocator.free(names);
         }
         for (names) |name| {
@@ -219,8 +219,8 @@ pub fn runRemote(allocator: std.mem.Allocator, git_dir: []const u8, args: []cons
         const infos = try listRemotesVerbose(allocator, git_dir);
         defer {
             for (infos) |info| {
-                allocator.free(@constCast(info.name));
-                allocator.free(@constCast(info.url));
+                allocator.free(info.name);
+                allocator.free(info.url);
             }
             allocator.free(infos);
         }

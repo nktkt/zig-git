@@ -112,7 +112,10 @@ pub const Repository = struct {
                 const git_dir = try allocator.alloc(u8, git_path.len);
                 @memcpy(git_dir, git_path);
 
-                const cache = try allocator.create(ObjectCache);
+                const cache = allocator.create(ObjectCache) catch {
+                    allocator.free(git_dir);
+                    return error.OutOfMemory;
+                };
                 cache.* = ObjectCache.init(allocator);
 
                 var repo = Repository{
@@ -141,7 +144,10 @@ pub const Repository = struct {
                     const git_dir = try allocator.alloc(u8, current.len);
                     @memcpy(git_dir, current);
 
-                    const cache2 = try allocator.create(ObjectCache);
+                    const cache2 = allocator.create(ObjectCache) catch {
+                        allocator.free(git_dir);
+                        return error.OutOfMemory;
+                    };
                     cache2.* = ObjectCache.init(allocator);
 
                     var repo = Repository{
@@ -262,12 +268,15 @@ pub const Repository = struct {
                 self.allocator.free(stored_path);
                 continue;
             };
-            _ = &pack_file;
 
-            try self.packs.append(PackEntry{
+            self.packs.append(PackEntry{
                 .pack = pack_file,
                 .path = stored_path,
-            });
+            }) catch {
+                pack_file.close();
+                self.allocator.free(stored_path);
+                return error.OutOfMemory;
+            };
         }
     }
 
@@ -305,6 +314,8 @@ pub const Repository = struct {
 
         for (prefixes) |prefix| {
             var path_buf: [4096]u8 = undefined;
+            const total_len = self.git_dir.len + 1 + prefix.len + name.len;
+            if (total_len > path_buf.len) continue;
             var pos: usize = 0;
 
             @memcpy(path_buf[pos..][0..self.git_dir.len], self.git_dir);
@@ -341,10 +352,6 @@ pub const Repository = struct {
 
         const content = readFileContents(allocator, packed_path) catch return null;
         defer allocator.free(content);
-
-        // Build full ref names to search for
-        const search_names = [_][]const u8{ name, "refs/heads/", "refs/tags/", "refs/remotes/" };
-        _ = search_names;
 
         var line_iter = std.mem.splitScalar(u8, content, '\n');
         while (line_iter.next()) |line| {
@@ -430,20 +437,30 @@ fn endsWithRef(full_ref: []const u8, name: []const u8) bool {
 }
 
 fn bufConcat(buf: []u8, a: []const u8, b: []const u8) []const u8 {
+    if (a.len + b.len > buf.len) {
+        // Truncate to buffer size to avoid out-of-bounds; caller should
+        // use large enough buffers, but crashing is worse.
+        const a_copy = @min(a.len, buf.len);
+        @memcpy(buf[0..a_copy], a[0..a_copy]);
+        const remaining = buf.len - a_copy;
+        const b_copy = @min(b.len, remaining);
+        @memcpy(buf[a_copy..][0..b_copy], b[0..b_copy]);
+        return buf[0 .. a_copy + b_copy];
+    }
     @memcpy(buf[0..a.len], a);
     @memcpy(buf[a.len..][0..b.len], b);
     return buf[0 .. a.len + b.len];
 }
 
 fn isDirectory(path: []const u8) bool {
-    const dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
     return true;
 }
 
 fn isFile(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    @constCast(&file).close();
+    var file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    file.close();
     return true;
 }
 

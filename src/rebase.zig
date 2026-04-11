@@ -317,8 +317,13 @@ fn applyOneCommit(
     if (cherry_parents.items.len == 0) return error.NoParent;
     const parent_oid = cherry_parents.items[0];
 
-    // Diff: parent -> cherry
-    var changes = try tree_diff.diffTrees(repo, allocator, &parent_oid, &cherry_tree_oid);
+    // Resolve parent commit to its tree OID for diffing
+    var parent_obj = try repo.readObject(allocator, &parent_oid);
+    defer parent_obj.deinit();
+    const parent_tree_oid = try tree_diff.getCommitTreeOid(parent_obj.data);
+
+    // Diff: parent tree -> cherry tree
+    var changes = try tree_diff.diffTrees(repo, allocator, &parent_tree_oid, &cherry_tree_oid);
     defer changes.deinit();
 
     // Get current HEAD
@@ -687,8 +692,8 @@ fn skipRebase(
 fn isRebaseInProgress(git_dir: []const u8) bool {
     var path_buf: [4096]u8 = undefined;
     const dir_path = buildPathBuf(&path_buf, git_dir, REBASE_DIR);
-    const dir = std.fs.openDirAbsolute(dir_path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(dir_path, .{}) catch return false;
+    dir.close();
     return true;
 }
 

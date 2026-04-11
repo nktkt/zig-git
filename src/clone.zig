@@ -2,17 +2,14 @@ const std = @import("std");
 const types = @import("types.zig");
 const repository = @import("repository.zig");
 const init_mod = @import("init.zig");
-const config_mod = @import("config.zig");
 const remote_mod = @import("remote.zig");
 const ref_mod = @import("ref.zig");
-const loose = @import("loose.zig");
 const url_mod = @import("url.zig");
 const smart_http = @import("smart_http.zig");
 const smart_ssh = @import("smart_ssh.zig");
 const pack_index_writer = @import("pack_index_writer.zig");
 const hash_mod = @import("hash.zig");
 
-const stdout_file = std.fs.File{ .handle = std.posix.STDOUT_FILENO };
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
 /// Clone a repository (local, HTTP/HTTPS, or SSH).
@@ -791,7 +788,8 @@ fn copyFileIfMissing(src: []const u8, dst: []const u8) !void {
     // Check if dst exists
     const check = std.fs.openFileAbsolute(dst, .{});
     if (check) |f| {
-        @constCast(&f).close();
+        var file_to_close = f;
+        file_to_close.close();
         return; // Already exists
     } else |_| {}
 
@@ -817,14 +815,14 @@ fn concatPath(buf: []u8, a: []const u8, b: []const u8) []const u8 {
 }
 
 fn isDirectory(path: []const u8) bool {
-    const dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
     return true;
 }
 
 fn isFile(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    @constCast(&file).close();
+    var file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    file.close();
     return true;
 }
 

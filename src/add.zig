@@ -269,14 +269,17 @@ fn addSingleFile(
         break :blk 0o100644;
     };
 
-    // Extract timestamps.
-    const mtime_s: u32 = @intCast(@as(u64, @intCast(@divFloor(stat.mtime, 1_000_000_000))));
-    const mtime_ns: u32 = @intCast(@as(u64, @intCast(@mod(stat.mtime, 1_000_000_000))));
-    const ctime_s: u32 = @intCast(@as(u64, @intCast(@divFloor(stat.ctime, 1_000_000_000))));
-    const ctime_ns: u32 = @intCast(@as(u64, @intCast(@mod(stat.ctime, 1_000_000_000))));
+    // Extract timestamps. Clamp negative values to 0 (pre-epoch files).
+    const mtime_raw = stat.mtime;
+    const ctime_raw = stat.ctime;
+    const mtime_s: u32 = if (mtime_raw >= 0) @intCast(@as(u64, @intCast(@divFloor(mtime_raw, 1_000_000_000)))) else 0;
+    const mtime_ns: u32 = if (mtime_raw >= 0) @intCast(@as(u64, @intCast(@mod(mtime_raw, 1_000_000_000)))) else 0;
+    const ctime_s: u32 = if (ctime_raw >= 0) @intCast(@as(u64, @intCast(@divFloor(ctime_raw, 1_000_000_000)))) else 0;
+    const ctime_ns: u32 = if (ctime_raw >= 0) @intCast(@as(u64, @intCast(@mod(ctime_raw, 1_000_000_000)))) else 0;
 
     // Make an owned copy of the name for the index entry.
     const owned_name = try allocator.alloc(u8, rel_path.len);
+    errdefer allocator.free(owned_name);
     @memcpy(owned_name, rel_path);
 
     const entry = index_mod.IndexEntry{
@@ -374,14 +377,14 @@ fn getWorkDir(git_dir: []const u8) []const u8 {
 }
 
 fn isDirectory(path: []const u8) bool {
-    const dir = std.fs.openDirAbsolute(path, .{}) catch return false;
-    @constCast(&dir).close();
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
     return true;
 }
 
 fn isFile(path: []const u8) bool {
-    const file = std.fs.openFileAbsolute(path, .{}) catch return false;
-    @constCast(&file).close();
+    var file = std.fs.openFileAbsolute(path, .{}) catch return false;
+    file.close();
     return true;
 }
 

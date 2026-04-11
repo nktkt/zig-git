@@ -257,8 +257,25 @@ fn createTreeFromFlat(
     }
 
     // Write the tree object
-    const tree_oid = try loose.writeLooseObject(allocator, repo_git_dir, .tree, tree_data.items);
-    return tree_oid;
+    return loose.writeLooseObject(allocator, repo_git_dir, .tree, tree_data.items) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            // Object already exists - compute the OID
+            var header_buf: [64]u8 = undefined;
+            var hstream = std.io.fixedBufferStream(&header_buf);
+            const hwriter = hstream.writer();
+            hwriter.writeAll("tree ") catch unreachable;
+            hwriter.print("{d}", .{tree_data.items.len}) catch unreachable;
+            hwriter.writeByte(0) catch unreachable;
+            const header = header_buf[0..hstream.pos];
+
+            const hash_mod = @import("hash.zig");
+            var hasher = hash_mod.Sha1.init(.{});
+            hasher.update(header);
+            hasher.update(tree_data.items);
+            return types.ObjectId{ .bytes = hasher.finalResult() };
+        },
+        else => return err,
+    };
 }
 
 /// Create a commit object in the object database.
@@ -337,7 +354,25 @@ fn createCommitObject(
     try commit_data.appendSlice(message);
     try commit_data.append('\n');
 
-    const oid = try loose.writeLooseObject(allocator, repo_git_dir, .commit, commit_data.items);
+    const oid = loose.writeLooseObject(allocator, repo_git_dir, .commit, commit_data.items) catch |err| switch (err) {
+        error.PathAlreadyExists => {
+            // Object already exists - compute the OID
+            var header_buf2: [64]u8 = undefined;
+            var hstream2 = std.io.fixedBufferStream(&header_buf2);
+            const hwriter2 = hstream2.writer();
+            hwriter2.writeAll("commit ") catch unreachable;
+            hwriter2.print("{d}", .{commit_data.items.len}) catch unreachable;
+            hwriter2.writeByte(0) catch unreachable;
+            const header2 = header_buf2[0..hstream2.pos];
+
+            const hash_mod = @import("hash.zig");
+            var hasher2 = hash_mod.Sha1.init(.{});
+            hasher2.update(header2);
+            hasher2.update(commit_data.items);
+            return types.ObjectId{ .bytes = hasher2.finalResult() };
+        },
+        else => return err,
+    };
     return oid;
 }
 

@@ -79,7 +79,11 @@ fn createTag(repo: *repository.Repository, allocator: std.mem.Allocator, name: [
 
     // Build ref name
     const ref_name_prefix = "refs/tags/";
-    var ref_name_buf: [256]u8 = undefined;
+    var ref_name_buf: [512]u8 = undefined;
+    if (ref_name_prefix.len + name.len > ref_name_buf.len) {
+        try stderr_file.writeAll("fatal: tag name too long\n");
+        std.process.exit(128);
+    }
     @memcpy(ref_name_buf[0..ref_name_prefix.len], ref_name_prefix);
     @memcpy(ref_name_buf[ref_name_prefix.len..][0..name.len], name);
     const ref_name = ref_name_buf[0 .. ref_name_prefix.len + name.len];
@@ -105,7 +109,11 @@ fn createTag(repo: *repository.Repository, allocator: std.mem.Allocator, name: [
 
 fn deleteTag(repo: *repository.Repository, allocator: std.mem.Allocator, name: []const u8) !void {
     const ref_name_prefix = "refs/tags/";
-    var ref_name_buf: [256]u8 = undefined;
+    var ref_name_buf: [512]u8 = undefined;
+    if (ref_name_prefix.len + name.len > ref_name_buf.len) {
+        try stderr_file.writeAll("error: tag name too long\n");
+        std.process.exit(1);
+    }
     @memcpy(ref_name_buf[0..ref_name_prefix.len], ref_name_prefix);
     @memcpy(ref_name_buf[ref_name_prefix.len..][0..name.len], name);
     const ref_name = ref_name_buf[0 .. ref_name_prefix.len + name.len];

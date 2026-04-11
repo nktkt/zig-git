@@ -288,14 +288,17 @@ fn checkWorktreeStatus(work_dir: []const u8, entry: *const index_mod.IndexEntry)
     if (@as(u32, @intCast(stat.size)) != entry.file_size) return 'M';
 
     // Check mtime - if same, assume unchanged
-    const mtime_s: u32 = @intCast(@divFloor(stat.mtime, 1_000_000_000));
-    const mtime_ns: u32 = @intCast(@mod(stat.mtime, 1_000_000_000));
+    const mtime_s: u32 = if (stat.mtime >= 0) @intCast(@as(u64, @intCast(@divFloor(stat.mtime, 1_000_000_000)))) else 0;
+    const mtime_ns: u32 = if (stat.mtime >= 0) @intCast(@as(u64, @intCast(@mod(stat.mtime, 1_000_000_000)))) else 0;
     if (mtime_s == entry.mtime_s and mtime_ns == entry.mtime_ns) return ' ';
 
     // mtime changed - need to compare content hash
     // Read file and compute SHA-1 of "blob SIZE\0CONTENT"
+    // If file is larger than 1MB, assume modified to avoid huge stack allocation
+    if (stat.size > 1024 * 1024) return 'M';
     var content_buf: [1024 * 1024]u8 = undefined;
-    const n = file.readAll(&content_buf) catch return 'M';
+    const file_size: usize = @intCast(stat.size);
+    const n = file.readAll(content_buf[0..file_size]) catch return 'M';
     const content = content_buf[0..n];
 
     var header_buf: [64]u8 = undefined;

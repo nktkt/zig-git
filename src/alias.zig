@@ -1,6 +1,5 @@
 const std = @import("std");
 const config_mod = @import("config.zig");
-const repository = @import("repository.zig");
 
 const stderr_file = std.fs.File{ .handle = std.posix.STDERR_FILENO };
 
@@ -100,7 +99,7 @@ pub fn resolveAlias(
 
 /// Execute a shell alias command.
 pub fn executeShellAlias(allocator: std.mem.Allocator, shell_cmd: []const u8, extra_args: []const []const u8) !void {
-    // Build the full shell command with extra args
+    // Build the full shell command with extra args (shell-quoted to prevent injection)
     var full_cmd = std.array_list.Managed(u8).init(allocator);
     defer full_cmd.deinit();
 
@@ -108,7 +107,16 @@ pub fn executeShellAlias(allocator: std.mem.Allocator, shell_cmd: []const u8, ex
 
     for (extra_args) |arg| {
         try full_cmd.append(' ');
-        try full_cmd.appendSlice(arg);
+        // Shell-quote each argument to prevent injection
+        try full_cmd.append('\'');
+        for (arg) |ch| {
+            if (ch == '\'') {
+                try full_cmd.appendSlice("'\\''");
+            } else {
+                try full_cmd.append(ch);
+            }
+        }
+        try full_cmd.append('\'');
     }
 
     // Execute using /bin/sh -c

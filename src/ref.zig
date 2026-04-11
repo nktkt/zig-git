@@ -11,7 +11,14 @@ pub const RefEntry = struct {
 /// Caller owns the returned slice and all strings in it.
 pub fn listRefs(allocator: std.mem.Allocator, git_dir: []const u8, prefix: []const u8) ![]RefEntry {
     var entries = std.array_list.Managed(RefEntry).init(allocator);
-    defer entries.deinit();
+    defer {
+        // Free any names still owned by entries that were not moved to deduped
+        // (all names are freed either here via deinit or transferred to deduped)
+        entries.deinit();
+    }
+    errdefer {
+        for (entries.items) |e| allocator.free(@constCast(e.name));
+    }
 
     // Scan loose refs
     try scanLooseRefs(allocator, git_dir, prefix, &entries);
@@ -55,6 +62,8 @@ pub fn freeRefEntries(allocator: std.mem.Allocator, entries: []RefEntry) void {
 
 fn scanLooseRefs(allocator: std.mem.Allocator, git_dir: []const u8, prefix: []const u8, entries: *std.array_list.Managed(RefEntry)) !void {
     var path_buf: [4096]u8 = undefined;
+    const total_len = git_dir.len + 1 + prefix.len;
+    if (total_len > path_buf.len) return;
     var pos: usize = 0;
     @memcpy(path_buf[pos..][0..git_dir.len], git_dir);
     pos += git_dir.len;
@@ -88,6 +97,8 @@ fn scanLooseRefs(allocator: std.mem.Allocator, git_dir: []const u8, prefix: []co
 
         // Read the ref file
         var ref_path_buf: [4096]u8 = undefined;
+        const ref_total = dir_path.len + 1 + entry.name.len;
+        if (ref_total > ref_path_buf.len) continue;
         var rpos: usize = 0;
         @memcpy(ref_path_buf[rpos..][0..dir_path.len], dir_path);
         rpos += dir_path.len;
@@ -111,6 +122,7 @@ fn scanLooseRefs(allocator: std.mem.Allocator, git_dir: []const u8, prefix: []co
         // Build full ref name: prefix + entry.name
         const name_len = prefix.len + entry.name.len;
         const name = try allocator.alloc(u8, name_len);
+        errdefer allocator.free(name);
         @memcpy(name[0..prefix.len], prefix);
         @memcpy(name[prefix.len..], entry.name);
 
@@ -141,6 +153,7 @@ fn scanPackedRefs(allocator: std.mem.Allocator, git_dir: []const u8, prefix: []c
         const oid = types.ObjectId.fromHex(hex_part) catch continue;
 
         const name = try allocator.alloc(u8, ref_name.len);
+        errdefer allocator.free(name);
         @memcpy(name, ref_name);
 
         try entries.append(.{ .name = name, .oid = oid });
@@ -151,6 +164,8 @@ fn scanPackedRefs(allocator: std.mem.Allocator, git_dir: []const u8, prefix: []c
 /// points to that OID before updating (CAS).
 pub fn createRef(allocator: std.mem.Allocator, git_dir: []const u8, name: []const u8, oid: types.ObjectId, old_oid_check: ?types.ObjectId) !void {
     var path_buf: [4096]u8 = undefined;
+    const total_len = git_dir.len + 1 + name.len;
+    if (total_len > path_buf.len) return error.InvalidRefName;
     var pos: usize = 0;
     @memcpy(path_buf[pos..][0..git_dir.len], git_dir);
     pos += git_dir.len;
@@ -188,6 +203,8 @@ pub fn createRef(allocator: std.mem.Allocator, git_dir: []const u8, name: []cons
 /// Delete a loose ref file.
 pub fn deleteRef(git_dir: []const u8, name: []const u8) !void {
     var path_buf: [4096]u8 = undefined;
+    const total_len = git_dir.len + 1 + name.len;
+    if (total_len > path_buf.len) return error.InvalidRefName;
     var pos: usize = 0;
     @memcpy(path_buf[pos..][0..git_dir.len], git_dir);
     pos += git_dir.len;
@@ -206,6 +223,8 @@ pub fn deleteRef(git_dir: []const u8, name: []const u8) !void {
 /// Update a symbolic ref (e.g. HEAD -> refs/heads/main).
 pub fn updateSymRef(git_dir: []const u8, name: []const u8, target: []const u8) !void {
     var path_buf: [4096]u8 = undefined;
+    const total_len = git_dir.len + 1 + name.len;
+    if (total_len > path_buf.len) return error.InvalidRefName;
     var pos: usize = 0;
     @memcpy(path_buf[pos..][0..git_dir.len], git_dir);
     pos += git_dir.len;
@@ -231,8 +250,9 @@ pub fn updateSymRef(git_dir: []const u8, name: []const u8, target: []const u8) !
 /// Read HEAD and return the symbolic target (e.g. "refs/heads/main") or null if detached.
 pub fn readHead(allocator: std.mem.Allocator, git_dir: []const u8) !?[]const u8 {
     var path_buf: [4096]u8 = undefined;
-    @memcpy(path_buf[0..git_dir.len], git_dir);
     const suffix = "/HEAD";
+    if (git_dir.len + suffix.len > path_buf.len) return error.RefNotFound;
+    @memcpy(path_buf[0..git_dir.len], git_dir);
     @memcpy(path_buf[git_dir.len..][0..suffix.len], suffix);
     const head_path = path_buf[0 .. git_dir.len + suffix.len];
 
@@ -253,6 +273,8 @@ pub fn readHead(allocator: std.mem.Allocator, git_dir: []const u8) !?[]const u8 
 /// Read a direct ref file and return the OID it points to.
 pub fn readRef(allocator: std.mem.Allocator, git_dir: []const u8, name: []const u8) !types.ObjectId {
     var path_buf: [4096]u8 = undefined;
+    const total_len = git_dir.len + 1 + name.len;
+    if (total_len > path_buf.len) return error.RefNotFound;
     var pos: usize = 0;
     @memcpy(path_buf[pos..][0..git_dir.len], git_dir);
     pos += git_dir.len;
