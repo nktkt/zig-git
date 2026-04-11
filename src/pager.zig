@@ -39,27 +39,13 @@ pub fn startPager(allocator: std.mem.Allocator, git_dir: ?[]const u8) void {
     if (!isPagerEnabled()) return;
     if (pager_active) return;
 
-    // Set LESS environment variable for better defaults
-    // F = quit if one screen, R = raw control chars, X = no init/deinit
-    var env_map = std.process.getEnvMap(allocator) catch return;
-    defer env_map.deinit();
-
-    // Only set LESS if not already set
-    if (env_map.get("LESS") == null) {
-        env_map.put("LESS", "FRX") catch {};
-    }
-
     // Spawn the pager process
-    var child = std.process.Child.init(&[_][]const u8{"less"}, allocator);
+    var child = std.process.Child.init(&[_][]const u8{ "less", "-FRX" }, allocator);
     child.stdin_behavior = .Pipe;
     child.stdout_behavior = .Inherit;
     child.stderr_behavior = .Inherit;
-    child.env_map = &env_map;
 
-    child.spawn() catch |err| {
-        var buf: [128]u8 = undefined;
-        const msg = std.fmt.bufPrint(&buf, "warning: failed to start pager: {s}\n", .{@errorName(err)}) catch return;
-        stderr_file.writeAll(msg) catch {};
+    child.spawn() catch {
         return;
     };
 
