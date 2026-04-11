@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Build
+        run: zig build
+      - name: Build Release
+        run: zig build -Doptimize=ReleaseFast
+      - name: Test
+        run: zig build test
+      - name: Smoke test
+        run: |
+          ./zig-out/bin/zig-git version
+          ./zig-out/bin/zig-git init /tmp/test-repo
+          cd /tmp/test-repo
+          git config user.name "CI" && git config user.email "ci@test.com"
+          $GITHUB_WORKSPACE/zig-out/bin/zig-git add . || true
+          $GITHUB_WORKSPACE/zig-out/bin/zig-git commit --allow-empty -m "CI test"
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Build
+        run: zig build
+      - name: Build Release
+        run: zig build -Doptimize=ReleaseFast
+      - name: Test
+        run: zig build test
+      - name: Smoke test
+        run: |
+          ./zig-out/bin/zig-git version
+          ./zig-out/bin/zig-git init /tmp/test-repo

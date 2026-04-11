@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-linux
+            artifact: zig-git-linux-x86_64
+          - os: macos-latest
+            target: aarch64-macos
+            artifact: zig-git-macos-arm64
+          - os: macos-13
+            target: x86_64-macos
+            artifact: zig-git-macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
+      - name: Install zlib (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Build Release
+        run: zig build -Doptimize=ReleaseFast
+      - name: Package
+        run: |
+          mkdir -p dist
+          cp zig-out/bin/zig-git dist/${{ matrix.artifact }}
+          chmod +x dist/${{ matrix.artifact }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            zig-git-linux-x86_64/zig-git-linux-x86_64
+            zig-git-macos-arm64/zig-git-macos-arm64
+            zig-git-macos-x86_64/zig-git-macos-x86_64
+          generate_release_notes: true
